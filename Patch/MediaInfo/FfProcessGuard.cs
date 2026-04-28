@@ -529,6 +529,10 @@ namespace MediaInfoKeeper.Patch
         private static async Task<T> AwaitGenericTask<T>(Task<T> task, bool shouldPersistAfterSuccess)
         {
             var result = await task.ConfigureAwait(false);
+            if (result == null)
+            {
+                return result;
+            }
 
             var stdout = standardOutput?.GetValue(result) as string;
             var stderr = standardError?.GetValue(result) as string;
