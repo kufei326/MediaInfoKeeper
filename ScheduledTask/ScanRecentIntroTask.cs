@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using MediaBrowser.Controller.Entities.TV;
@@ -23,7 +24,7 @@ namespace MediaInfoKeeper.ScheduledTask
 
         public string Name => "3.扫描片头";
 
-        public string Description => "全局媒体库范围内，按入库时间倒序取最近 N 条（“最近入库媒体筛选数量”）的剧集执行片头检测。";
+        public string Description => "计划任务媒体库范围内，按入库时间倒序取最近 N 条（“最近入库媒体筛选数量”）的剧集执行片头检测。";
 
         public string Category => Plugin.TaskCategoryName;
 
@@ -44,8 +45,11 @@ namespace MediaInfoKeeper.ScheduledTask
 
         private List<Episode> FetchRecentEpisodes()
         {
-            var episodes = Plugin.LibraryService.FetchRecentItems(
-                Plugin.Instance.Options.MainPage.RecentItemsLimit);
+            var episodes = Plugin.LibraryService.FetchScheduledTaskLibraryItems(
+                    orderByDateCreatedDesc: true,
+                    take: Math.Max(1, Plugin.Instance.Options.MainPage.RecentItemsLimit))
+                .OfType<Episode>()
+                .ToList();
             this.logger.Info($"扫描条目数 {episodes.Count}");
             return episodes;
         }
