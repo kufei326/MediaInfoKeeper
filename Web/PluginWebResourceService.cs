@@ -3,7 +3,6 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Threading;
-using MediaBrowser.Common.Extensions;
 using MediaBrowser.Controller.Entities;
 using MediaBrowser.Controller.Entities.Audio;
 using MediaBrowser.Controller.Entities.TV;
@@ -78,26 +77,26 @@ namespace MediaInfoKeeper.Web
         {
             if (request == null || string.IsNullOrWhiteSpace(request.ItemId))
             {
-                throw new ResourceNotFoundException();
+                return CreateEmptyDanmuResult();
             }
 
             var logger = Plugin.Instance?.Logger;
             if (Plugin.Instance?.Options?.MetaData?.EnableDanmuApi != true)
             {
-                logger?.Info("弹幕API: 已禁用，返回 404");
-                throw new ResourceNotFoundException();
+                logger?.Debug("弹幕API: 已禁用，返回空结果");
+                return CreateEmptyDanmuResult();
             }
 
             var item = _libraryManager.GetItemById(request.ItemId);
             if (item == null || string.IsNullOrWhiteSpace(item.ContainingFolderPath) ||
                 string.IsNullOrWhiteSpace(item.FileNameWithoutExtension))
             {
-                throw new ResourceNotFoundException();
+                return CreateEmptyDanmuResult();
             }
 
             if (Plugin.DanmuService?.IsSupportedItem(item) != true)
             {
-                logger?.Info($"弹幕API: 非视频条目，跳过 itemId={request.ItemId} item={item.FileName} type={item.GetType().Name}");
+                logger?.Debug($"弹幕API: 非视频条目，跳过 itemId={request.ItemId} item={item.FileName} type={item.GetType().Name}");
                 return _resultFactory.GetResult(Request, ReadOnlyMemory<byte>.Empty, "application/xml");
             }
 
@@ -110,7 +109,7 @@ namespace MediaInfoKeeper.Web
 
             if (!networkFirst && localExists)
             {
-                logger?.Info($"弹幕API: 本地命中，直接返回 {logContext} path={danmuXmlPath}");
+                logger?.Debug($"弹幕API: 本地命中，直接返回 {logContext} path={danmuXmlPath}");
                 return _resultFactory.GetStaticFileResult(Request, danmuXmlPath, FileShareMode.Read).GetAwaiter().GetResult();
             }
 
@@ -134,36 +133,41 @@ namespace MediaInfoKeeper.Web
                             }
 
                             File.WriteAllBytes(danmuXmlPath, xmlBytes);
-                            logger?.Info(networkFirst
+                            logger?.Debug(networkFirst
                                 ? $"弹幕API: 网络拉取成功并写入本地 {logContext} path={danmuXmlPath}"
                                 : $"弹幕API: 本地未命中，临时拉取并写入本地 {logContext} path={danmuXmlPath}");
                         }
                         catch (Exception ex)
                         {
-                            logger?.Info($"弹幕API: 拉取成功但写入本地失败 {logContext} path={danmuXmlPath} error={ex.Message}");
+                            logger?.Debug($"弹幕API: 拉取成功但写入本地失败 {logContext} path={danmuXmlPath} error={ex.Message}");
                             logger?.Debug(ex.StackTrace);
                         }
 
                         return _resultFactory.GetResult(Request, (ReadOnlyMemory<byte>)xmlBytes, "application/xml");
                     }
 
-                    logger?.Info($"弹幕API: 网络拉取结果为空 {logContext}");
+                    logger?.Debug($"弹幕API: 网络拉取结果为空 {logContext}");
                 }
                 catch (Exception ex)
                 {
-                    logger?.Info($"弹幕API: 网络拉取失败 {logContext} error={ex.Message}");
+                    logger?.Debug($"弹幕API: 网络拉取失败 {logContext} error={ex.Message}");
                     logger?.Debug(ex.StackTrace);
                 }
             }
 
             if (networkFirst && localExists)
             {
-                logger?.Info($"弹幕API: 网络优先回退本地 {logContext} path={danmuXmlPath}");
+                logger?.Debug($"弹幕API: 网络优先回退本地 {logContext} path={danmuXmlPath}");
                 return _resultFactory.GetStaticFileResult(Request, danmuXmlPath, FileShareMode.Read).GetAwaiter().GetResult();
             }
 
-            logger?.Info($"弹幕API: 无可用弹幕，返回404 {logContext}");
-            throw new ResourceNotFoundException();
+            logger?.Debug($"弹幕API: 无可用弹幕，返回空结果 {logContext}");
+            return CreateEmptyDanmuResult();
+        }
+
+        private object CreateEmptyDanmuResult()
+        {
+            return _resultFactory.GetResult(Request, ReadOnlyMemory<byte>.Empty, "application/xml");
         }
 
         public MediaInfoMenuResponse Post(ExtractMediaInfoRequest request)

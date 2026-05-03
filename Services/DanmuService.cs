@@ -16,6 +16,13 @@ namespace MediaInfoKeeper.Services
 {
     public class DanmuService
     {
+        public sealed class DanmuDownloadResult
+        {
+            public bool Succeeded { get; set; }
+
+            public string Reason { get; set; }
+        }
+
         private sealed class QueuedDanmuItem
         {
             public long InternalId { get; set; }
@@ -23,6 +30,8 @@ namespace MediaInfoKeeper.Services
             public bool OverwriteExisting { get; set; }
 
             public TaskCompletionSource<bool> CompletionSource { get; set; }
+
+            public TaskCompletionSource<DanmuDownloadResult> DetailCompletionSource { get; set; }
         }
 
         private static readonly TimeSpan QueueIntervalDelay = TimeSpan.FromSeconds(3);
@@ -70,6 +79,29 @@ namespace MediaInfoKeeper.Services
             return completionSource.Task;
         }
 
+        public Task<DanmuDownloadResult> QueueDownloadWithReasonAsync(long internalId, bool overwriteExisting, CancellationToken cancellationToken)
+        {
+            var completionSource = new TaskCompletionSource<DanmuDownloadResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+            if (cancellationToken.CanBeCanceled)
+            {
+                cancellationToken.Register(() => completionSource.TrySetCanceled(cancellationToken));
+            }
+
+            var item = Plugin.LibraryManager?.GetItemById(internalId);
+            if (!overwriteExisting && ShouldSkipAutoDownload(item))
+            {
+                completionSource.TrySetResult(new DanmuDownloadResult
+                {
+                    Succeeded = false,
+                    Reason = "已存在弹幕文件"
+                });
+                return completionSource.Task;
+            }
+
+            Enqueue(internalId, overwriteExisting, detailCompletionSource: completionSource);
+            return completionSource.Task;
+        }
+
         private void Enqueue(long internalId, bool overwriteExisting, TaskCompletionSource<bool> completionSource)
         {
             itemAddedQueue.Enqueue(new QueuedDanmuItem
@@ -77,6 +109,22 @@ namespace MediaInfoKeeper.Services
                 InternalId = internalId,
                 OverwriteExisting = overwriteExisting,
                 CompletionSource = completionSource
+            });
+            queueSignal.Release();
+
+            if (Interlocked.CompareExchange(ref queueWorkerStarted, 1, 0) == 0)
+            {
+                _ = Task.Run(ProcessItemAddedQueueAsync);
+            }
+        }
+
+        private void Enqueue(long internalId, bool overwriteExisting, TaskCompletionSource<DanmuDownloadResult> detailCompletionSource)
+        {
+            itemAddedQueue.Enqueue(new QueuedDanmuItem
+            {
+                InternalId = internalId,
+                OverwriteExisting = overwriteExisting,
+                DetailCompletionSource = detailCompletionSource
             });
             queueSignal.Release();
 
@@ -101,11 +149,17 @@ namespace MediaInfoKeeper.Services
                     try
                     {
                         var result = await ProcessQueuedItemAsync(queuedItem).ConfigureAwait(false);
-                        queuedItem.CompletionSource?.TrySetResult(result);
+                        queuedItem.CompletionSource?.TrySetResult(result.Succeeded);
+                        queuedItem.DetailCompletionSource?.TrySetResult(result);
                     }
                     catch (Exception ex) when (string.Equals(ex.Message, TooManyRequestsMessage, StringComparison.Ordinal))
                     {
                         queuedItem.CompletionSource?.TrySetResult(false);
+                        queuedItem.DetailCompletionSource?.TrySetResult(new DanmuDownloadResult
+                        {
+                            Succeeded = false,
+                            Reason = "请求过多，队列休息 60 秒"
+                        });
                         this.logger.Info($"弹幕下载: 失败 {queuedItem.InternalId} {ex.Message}，队列休息 60 秒");
                         await Task.Delay(TooManyRequestsDelay).ConfigureAwait(false);
                     }
@@ -119,26 +173,26 @@ namespace MediaInfoKeeper.Services
             }
         }
 
-        private async Task<bool> ProcessQueuedItemAsync(QueuedDanmuItem queuedItem)
+        private async Task<DanmuDownloadResult> ProcessQueuedItemAsync(QueuedDanmuItem queuedItem)
         {
             if (queuedItem == null)
             {
-                return false;
+                return Failed("队列项为空");
             }
 
             var internalId = queuedItem.InternalId;
             var currentItem = Plugin.LibraryManager?.GetItemById(internalId);
             if (currentItem == null || Plugin.Instance == null || Plugin.Instance.Options.MainPage?.PlugginEnabled != true || !IsSupportedItem(currentItem))
             {
-                return false;
+                return Failed("条目无效或插件未启用");
             }
 
             if (!IsEnabled)
             {
-                return false;
+                return Failed("弹幕 API 未启用");
             }
 
-            return await TryDownloadDanmuXmlAsync(currentItem, CancellationToken.None, queuedItem.OverwriteExisting).ConfigureAwait(false);
+            return await TryDownloadDanmuXmlDetailedAsync(currentItem, CancellationToken.None, queuedItem.OverwriteExisting).ConfigureAwait(false);
         }
 
         public bool ShouldSkipAutoDownload(BaseItem item)
@@ -183,20 +237,25 @@ namespace MediaInfoKeeper.Services
 
         public async Task<bool> TryDownloadDanmuXmlAsync(BaseItem item, CancellationToken cancellationToken, bool overwriteExisting = false)
         {
+            var result = await TryDownloadDanmuXmlDetailedAsync(item, cancellationToken, overwriteExisting).ConfigureAwait(false);
+            return result.Succeeded;
+        }
+
+        public async Task<DanmuDownloadResult> TryDownloadDanmuXmlDetailedAsync(BaseItem item, CancellationToken cancellationToken, bool overwriteExisting = false)
+        {
             if (!IsEnabled || item == null)
             {
-                return false;
+                return Failed("弹幕 API 未启用或条目为空");
             }
 
             if (item is not Episode && item is not Movie)
             {
-                return false;
+                return Failed("条目类型不支持");
             }
 
             if (string.IsNullOrWhiteSpace(item.ContainingFolderPath) || string.IsNullOrWhiteSpace(item.FileNameWithoutExtension))
             {
-                this.logger.Info($"弹幕下载: 跳过 {item.FileName} 路径信息不完整");
-                return false;
+                return Failed("路径信息不完整");
             }
 
             var networkFirst = string.Equals(
@@ -207,15 +266,18 @@ namespace MediaInfoKeeper.Services
             var targetPath = GetDanmuXmlPath(item);
             if (!overwrite && File.Exists(targetPath))
             {
-                this.logger.Info($"弹幕下载: 跳过 {item.FileName} 文件已存在");
-                return false;
+                return Failed("已存在弹幕文件");
             }
 
-            var xmlBytes = await FetchDanmuXmlBytesAsync(item, cancellationToken).ConfigureAwait(false);
-            if (xmlBytes == null || xmlBytes.Length == 0)
+            var fetchResult = await FetchDanmuXmlDetailedAsync(item, cancellationToken).ConfigureAwait(false);
+            if (fetchResult.XmlBytes == null || fetchResult.XmlBytes.Length == 0)
             {
-                this.logger.Info($"弹幕下载: 跳过 {item.FileName} 未获取到内容");
-                return false;
+                if (!string.IsNullOrWhiteSpace(fetchResult.Reason))
+                {
+                    return Failed(fetchResult.Reason);
+                }
+
+                return Failed("未获取到内容");
             }
 
             var directory = Path.GetDirectoryName(targetPath);
@@ -224,45 +286,73 @@ namespace MediaInfoKeeper.Services
                 Directory.CreateDirectory(directory);
             }
 
-            await File.WriteAllBytesAsync(targetPath, xmlBytes, cancellationToken).ConfigureAwait(false);
+            await File.WriteAllBytesAsync(targetPath, fetchResult.XmlBytes, cancellationToken).ConfigureAwait(false);
             this.logger.Info($"弹幕下载: 成功 {item.FileName}");
-            return true;
+            return Succeeded();
         }
 
         public async Task<byte[]> FetchDanmuXmlBytesAsync(BaseItem item, CancellationToken cancellationToken)
         {
+            var result = await FetchDanmuXmlDetailedAsync(item, cancellationToken).ConfigureAwait(false);
+            return result.XmlBytes;
+        }
+
+        private sealed class DanmuFetchResult
+        {
+            public byte[] XmlBytes { get; set; }
+
+            public string Reason { get; set; }
+        }
+
+        private async Task<DanmuFetchResult> FetchDanmuXmlDetailedAsync(BaseItem item, CancellationToken cancellationToken)
+        {
             if (!IsEnabled || item == null)
             {
-                return null;
+                return new DanmuFetchResult { Reason = "弹幕 API 未启用或条目为空" };
             }
 
             if (item is not Episode && item is not Movie)
             {
-                return null;
+                return new DanmuFetchResult { Reason = "条目类型不支持" };
             }
 
             if (!TryBuildSearchRequest(item, out var animeTitle, out var episodeNumber))
             {
-                this.logger.Info($"弹幕下载: 跳过 {item.FileName} 无法解析标题或集数");
-                return null;
+                return new DanmuFetchResult { Reason = "无法解析标题或集数" };
             }
 
             var baseUrl = Plugin.Instance?.Options?.MetaData?.DanmuApiBaseUrl?.Trim();
             var episodeId = await SearchEpisodeIdAsync(baseUrl, animeTitle, episodeNumber, cancellationToken).ConfigureAwait(false);
             if (string.IsNullOrWhiteSpace(episodeId))
             {
-                this.logger.Info($"弹幕下载: 跳过 {item.FileName} 未匹配到条目");
-                return null;
+                return new DanmuFetchResult { Reason = "未匹配到条目" };
             }
 
             var xmlBytes = await DownloadXmlAsync(baseUrl, episodeId, cancellationToken).ConfigureAwait(false);
             if (xmlBytes == null || xmlBytes.Length == 0)
             {
-                this.logger.Info($"弹幕下载: 跳过 {item.FileName} 未获取到内容 episodeId={episodeId}");
-                return null;
+                return new DanmuFetchResult { Reason = $"未获取到内容 episodeId={episodeId}" };
             }
 
-            return xmlBytes;
+            return new DanmuFetchResult { XmlBytes = xmlBytes };
+        }
+
+        private static DanmuDownloadResult Succeeded()
+        {
+            return new DanmuDownloadResult
+            {
+                Succeeded = true,
+                Reason = "成功"
+            };
+        }
+
+        private static DanmuDownloadResult Failed(string reason)
+        {
+            return new DanmuDownloadResult
+            {
+                Succeeded = false,
+                Reason = reason
+            };
         }
 
         private async Task<string> SearchEpisodeIdAsync(string baseUrl, string animeTitle, int episodeNumber, CancellationToken cancellationToken)

@@ -93,10 +93,10 @@ namespace MediaInfoKeeper.Services
             var sessionKey = !string.IsNullOrWhiteSpace(e.PlaySessionId)
                 ? e.PlaySessionId
                 : e.Session?.Id;
-            ScheduleNextEpisodePrefetch(nextEpisode.InternalId, nextEpisode.FileName ?? nextEpisode.Name, sessionKey, "下一集预加载");
+            ScheduleNextEpisodePrefetch(nextEpisode.InternalId, nextEpisode.FileName ?? nextEpisode.Name, sessionKey);
         }
 
-        private void ScheduleNextEpisodePrefetch(long nextEpisodeId, string nextEpisodeName, string sessionKey, string source)
+        private void ScheduleNextEpisodePrefetch(long nextEpisodeId, string nextEpisodeName, string sessionKey)
         {
             if (nextEpisodeId <= 0 || string.IsNullOrWhiteSpace(sessionKey))
             {
@@ -110,7 +110,7 @@ namespace MediaInfoKeeper.Services
                 return;
             }
 
-            logger.Info($"{source}: 5s后执行 {nextEpisodeName}");
+            logger.Info($"下一集预加载: 5s后执行 {nextEpisodeName}");
 
             _ = Task.Run(async () =>
             {
@@ -130,12 +130,12 @@ namespace MediaInfoKeeper.Services
 
                     if (Plugin.Instance?.Options?.GetMediaInfoOptions()?.EnableMediaInfoPrefetch == true)
                     {
-                        QueueMediaInfoPrefetchIfNeeded(nextEpisode, source);
+                        QueueMediaInfoPrefetchIfNeeded(nextEpisode);
                     }
 
                     if (Plugin.Instance?.Options?.MetaData?.EnableDanmuPrefetch == true)
                     {
-                        QueueDanmuPrefetchIfNeeded(nextEpisode, source);
+                        QueueDanmuPrefetchIfNeeded(nextEpisode);
                     }
                 }
                 catch (OperationCanceledException)
@@ -220,8 +220,10 @@ namespace MediaInfoKeeper.Services
             logger.Info($"{logPrefix}: 完成 {workItem.FileName ?? workItem.Name ?? displayName}");
         }
 
-        private void QueueMediaInfoPrefetchIfNeeded(BaseItem item, string source)
+        private void QueueMediaInfoPrefetchIfNeeded(BaseItem item)
         {
+            const string source = "媒体信息预加载";
+
             if (item is not Video && item is not Audio)
             {
                 return;
@@ -260,8 +262,10 @@ namespace MediaInfoKeeper.Services
             });
         }
 
-        private void QueueDanmuPrefetchIfNeeded(BaseItem item, string source)
+        private void QueueDanmuPrefetchIfNeeded(BaseItem item)
         {
+            const string source = "弹幕预加载";
+
             if (item is not Episode && item is not MediaBrowser.Controller.Entities.Movies.Movie)
             {
                 return;
@@ -274,13 +278,13 @@ namespace MediaInfoKeeper.Services
 
             if (Plugin.DanmuService.ShouldSkipAutoDownload(item))
             {
-                logger.Info($"{source} 弹幕预加载: 跳过，已存在弹幕文件 {item.FileName ?? item.Name}");
+                logger.Info($"{source}: 跳过，已存在弹幕文件 {item.FileName ?? item.Name}");
                 return;
             }
 
             if (!prefetchingDanmuItemIds.TryAdd(item.InternalId, 0))
             {
-                logger.Info($"{source} 弹幕预加载: 跳过，拉取中 {item.FileName ?? item.Name}");
+                logger.Info($"{source}: 跳过，拉取中 {item.FileName ?? item.Name}");
                 return;
             }
 
@@ -289,27 +293,28 @@ namespace MediaInfoKeeper.Services
                 MetaDataOptions.DanmuFetchModeOption.NetworkFirst.ToString(),
                 StringComparison.Ordinal);
 
-            logger.Info($"{source} 弹幕预加载: 开始 {item.FileName ?? item.Name}");
+            logger.Info($"{source}: 开始 {item.FileName ?? item.Name}");
 
             _ = Task.Run(async () =>
             {
                 try
                 {
-                    var succeeded = await Plugin.DanmuService
-                        .QueueDownloadAsync(item.InternalId, networkFirst, CancellationToken.None)
+                    var result = await Plugin.DanmuService
+                        .QueueDownloadWithReasonAsync(item.InternalId, networkFirst, CancellationToken.None)
                         .ConfigureAwait(false);
-                    if (succeeded)
+                    if (result?.Succeeded == true)
                     {
-                        logger.Info($"{source} 弹幕预加载: 完成 {item.FileName ?? item.Name}");
+                        logger.Info($"{source}: 完成 {item.FileName ?? item.Name}");
                     }
                     else
                     {
-                        logger.Info($"{source} 弹幕预加载: 跳过 {item.FileName ?? item.Name}");
+                        var reason = string.IsNullOrWhiteSpace(result?.Reason) ? "未获取到内容" : result.Reason;
+                        logger.Info($"{source}: 跳过，{reason} {item.FileName ?? item.Name}");
                     }
                 }
                 catch (Exception ex)
                 {
-                    logger.Error($"{source} 弹幕预加载: 失败 {item.FileName ?? item.Name}");
+                    logger.Error($"{source}: 失败 {item.FileName ?? item.Name}");
                     logger.Error(ex.Message);
                     logger.Debug(ex.StackTrace);
                 }
