@@ -334,6 +334,7 @@ namespace MediaInfoKeeper
             options.MainPage.RefreshRecentMetadataLibraries = NormalizeScopedLibraries(options.MainPage.RefreshRecentMetadataLibraries);
             options.MainPage.ScanRecentIntroLibraries = NormalizeScopedLibraries(options.MainPage.ScanRecentIntroLibraries);
             options.MainPage.ExtractRecentMediaInfoLibraries = NormalizeScopedLibraries(options.MainPage.ExtractRecentMediaInfoLibraries);
+            options.MainPage.DownloadDanmuXmlLibraries = NormalizeScopedLibraries(options.MainPage.DownloadDanmuXmlLibraries);
             options.MainPage.ExportExistingMediaInfoLibraries = NormalizeScopedLibraries(options.MainPage.ExportExistingMediaInfoLibraries);
             options.MainPage.RestoreMediaInfoLibraries = NormalizeScopedLibraries(options.MainPage.RestoreMediaInfoLibraries);
             options.MainPage.ScanExternalSubtitleLibraries = NormalizeScopedLibraries(options.MainPage.ScanExternalSubtitleLibraries);
@@ -503,6 +504,8 @@ namespace MediaInfoKeeper
                 new OptionLogEntry("Main.ScanRecentIntroLimit", "Main", "扫描片头最近条目数量", FormatTaskIntDisplayValue(options.MainPage.ScanRecentIntroLimit, false)),
                 new OptionLogEntry("Main.ExtractRecentMediaInfoLibraries", "Main", "提取媒体信息范围", FormatOptionValue(options.MainPage.ExtractRecentMediaInfoLibraries)),
                 new OptionLogEntry("Main.ExtractRecentMediaInfoLimit", "Main", "提取媒体信息最近条目数量", FormatTaskIntDisplayValue(options.MainPage.ExtractRecentMediaInfoLimit, false)),
+                new OptionLogEntry("Main.DownloadDanmuXmlLibraries", "Main", "下载弹幕范围", FormatOptionValue(options.MainPage.DownloadDanmuXmlLibraries)),
+                new OptionLogEntry("Main.DownloadDanmuXmlDays", "Main", "下载弹幕时间窗口", FormatTaskIntDisplayValue(options.MainPage.DownloadDanmuXmlDays, true)),
                 new OptionLogEntry("Main.ExportExistingMediaInfoLibraries", "Main", "备份媒体信息范围", FormatOptionValue(options.MainPage.ExportExistingMediaInfoLibraries)),
                 new OptionLogEntry("Main.RestoreMediaInfoLibraries", "Main", "恢复媒体信息范围", FormatOptionValue(options.MainPage.RestoreMediaInfoLibraries)),
                 new OptionLogEntry("Main.ScanExternalSubtitleLibraries", "Main", "扫描外挂字幕范围", FormatOptionValue(options.MainPage.ScanExternalSubtitleLibraries)),
