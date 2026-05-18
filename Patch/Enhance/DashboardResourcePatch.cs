@@ -168,10 +168,11 @@ namespace MediaInfoKeeper.Patch
             using var reader = new StreamReader(handler.Stream, Encoding.UTF8, true, 4096, leaveOpen: false);
             var originalContent = await reader.ReadToEndAsync().ConfigureAwait(false);
             var rewrittenContent = RewriteDashboardIndexHtml(originalContent);
+            var rewrittenBytes = Encoding.UTF8.GetBytes(rewrittenContent);
 
-            handler.Stream = new MemoryStream(Encoding.UTF8.GetBytes(rewrittenContent), writable: false);
-            handler.Length = rewrittenContent.Length;
-            handler.TotalLength = rewrittenContent.Length;
+            handler.Stream = new MemoryStream(rewrittenBytes, writable: false);
+            handler.Length = rewrittenBytes.LongLength;
+            handler.TotalLength = rewrittenBytes.LongLength;
             return handler;
         }
 

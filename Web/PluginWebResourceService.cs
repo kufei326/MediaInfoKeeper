@@ -60,13 +60,13 @@ namespace MediaInfoKeeper.Web
         public object Get(MediaInfoKeeperJsRequest request)
         {
             return _resultFactory.GetResult(Request,
-                (ReadOnlyMemory<byte>)PluginWebResourceLoader.MediaInfoKeeperJs.GetBuffer(), "application/x-javascript");
+                GetStreamBytes(PluginWebResourceLoader.MediaInfoKeeperJs), "application/x-javascript");
         }
 
         public object Get(EdeJsRequest request)
         {
             return _resultFactory.GetResult(Request,
-                (ReadOnlyMemory<byte>)PluginWebResourceLoader.EdeJs.GetBuffer(), "application/x-javascript");
+                GetStreamBytes(PluginWebResourceLoader.EdeJs), "application/x-javascript");
         }
 
         public object Get(ShortcutMenuRequest request)
@@ -170,6 +170,11 @@ namespace MediaInfoKeeper.Web
         private object CreateEmptyDanmuResult()
         {
             return _resultFactory.GetResult(Request, ReadOnlyMemory<byte>.Empty, "application/xml");
+        }
+
+        private static ReadOnlyMemory<byte> GetStreamBytes(MemoryStream stream)
+        {
+            return stream == null ? ReadOnlyMemory<byte>.Empty : new ReadOnlyMemory<byte>(stream.ToArray());
         }
 
         public MediaInfoMenuResponse Post(ExtractMediaInfoRequest request)
