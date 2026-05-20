@@ -9,14 +9,18 @@ using System.Threading.Tasks;
 using MediaInfoKeeper.Patch;
 using MediaInfoKeeper.Store;
 using MediaBrowser.Common;
+using MediaBrowser.Common.Configuration;
 using MediaBrowser.Controller.Entities;
 using MediaBrowser.Controller.Entities.TV;
 using MediaBrowser.Controller.Library;
+using MediaBrowser.Controller.MediaEncoding;
 using MediaBrowser.Controller.Providers;
+using MediaBrowser.Controller;
 using MediaBrowser.Model.Configuration;
 using MediaBrowser.Model.Entities;
 using MediaBrowser.Model.IO;
 using MediaBrowser.Model.Logging;
+using MediaBrowser.Model.Serialization;
 
 namespace MediaInfoKeeper.Services
 {
@@ -30,7 +34,6 @@ namespace MediaInfoKeeper.Services
         private SemaphoreSlim introScanSemaphore;
         private int configuredIntroScanConcurrency;
         private volatile AudioFingerprintRuntime audioFingerprintRuntime;
-        private volatile AppHostResolverRuntime appHostResolverRuntime;
 
         public IntroScanService(
             ILogManager logManager,
@@ -397,10 +400,10 @@ namespace MediaInfoKeeper.Services
                 }
                 else
                 {
-                    var detector = ResolveAppHostService(runtime.ManagerType);
+                    var detector = CreateAudioFingerprintManager(runtime);
                     if (detector == null)
                     {
-                        this.logger.Warn($"AudioFingerprintManager 服务解析失败: {runtime.ManagerType.FullName}");
+                        this.logger.Warn($"AudioFingerprintManager 实例创建失败: {runtime.ManagerType.FullName}");
                     }
                     else
                     {
@@ -501,10 +504,46 @@ namespace MediaInfoKeeper.Services
                     this.logger,
                     "IntroScanService.UpdateSequencesForSeason");
 
+                var managerConstructor = managerType.GetConstructor(
+                    BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic,
+                    null,
+                    new[]
+                    {
+                        typeof(IFileSystem),
+                        typeof(ILogger),
+                        typeof(IApplicationPaths),
+                        typeof(IFfmpegManager),
+                        typeof(IMediaEncoder),
+                        typeof(IMediaMountManager),
+                        typeof(IJsonSerializer),
+                        typeof(IServerApplicationHost)
+                    },
+                    null);
+
+                if (managerConstructor != null)
+                {
+                    PatchLog.ResolveHit(
+                        this.logger,
+                        "IntroScanService.AudioFingerprintManager..ctor",
+                        "exact",
+                        "audiofingerprintmanager-ctor-exact",
+                        BuildConstructorSignature(managerConstructor),
+                        providersVersion?.ToString() ?? "<unknown>");
+                }
+                else
+                {
+                    PatchLog.ResolveFailed(
+                        this.logger,
+                        "IntroScanService.AudioFingerprintManager..ctor",
+                        managerType.FullName,
+                        providersVersion?.ToString() ?? "<unknown>");
+                }
+
                 if (isIntroDetectionSupported == null ||
                     createTitleFingerprintAsync == null ||
                     getAllFingerprintFilesForSeason == null ||
-                    updateSequencesForSeason == null)
+                    updateSequencesForSeason == null ||
+                    managerConstructor == null)
                 {
                     this.logger.Warn("AudioFingerprintManager 关键方法缺失");
                     return null;
@@ -513,6 +552,7 @@ namespace MediaInfoKeeper.Services
                 audioFingerprintRuntime = new AudioFingerprintRuntime(
                     managerType,
                     seasonFingerprintInfoType,
+                    managerConstructor,
                     isIntroDetectionSupported,
                     createTitleFingerprintAsync,
                     getAllFingerprintFilesForSeason,
@@ -521,164 +561,67 @@ namespace MediaInfoKeeper.Services
             }
         }
 
-        /// <summary>通过 IApplicationHost 的精确泛型入口解析指定服务。</summary>
-        private object ResolveAppHostService(Type serviceType)
+        /// <summary>按 Emby 真实构造函数精确实例化 AudioFingerprintManager。</summary>
+        private object CreateAudioFingerprintManager(AudioFingerprintRuntime runtime)
         {
             var appHost = Plugin.Instance.AppHost;
             if (appHost == null)
             {
-                this.logger.Debug($"服务解析失败 {serviceType.FullName}: AppHost 为空");
+                this.logger.Debug("AudioFingerprintManager 实例创建失败: AppHost 为空");
                 return null;
             }
 
-            var resolverRuntime = GetOrCreateAppHostResolverRuntime(appHost.GetType());
-            if (resolverRuntime == null)
+            if (runtime?.ManagerConstructor == null)
             {
-                this.logger.Debug($"服务解析失败 {serviceType.FullName}: AppHost 精确解析入口缺失");
+                this.logger.Debug("AudioFingerprintManager 实例创建失败: 构造函数缺失");
                 return null;
             }
 
-            var service = InvokeGenericResolver(appHost, resolverRuntime.Resolve, serviceType);
-            if (service != null)
+            if (appHost is not IServerApplicationHost serverAppHost)
             {
-                this.logger.Debug($"服务解析 {serviceType.FullName}: IApplicationHost.Resolve<T>() 成功");
-                return service;
-            }
-
-            service = InvokeGenericResolver(appHost, resolverRuntime.TryResolve, serviceType);
-            if (service != null)
-            {
-                this.logger.Debug($"服务解析 {serviceType.FullName}: IApplicationHost.TryResolve<T>() 成功");
-                return service;
-            }
-
-            service = InvokeGenericResolver(appHost, resolverRuntime.GetExports, serviceType, false);
-            if (service != null)
-            {
-                this.logger.Debug($"服务解析 {serviceType.FullName}: IApplicationHost.GetExports<T>(false) 成功");
-                return service;
-            }
-
-            service = InvokeGenericResolver(appHost, resolverRuntime.GetExports, serviceType, true);
-            if (service != null)
-            {
-                this.logger.Debug($"服务解析 {serviceType.FullName}: IApplicationHost.GetExports<T>(true) 成功");
-                return service;
-            }
-
-            this.logger.Debug($"服务解析失败 {serviceType.FullName}: IApplicationHost.Resolve/TryResolve/GetExports 均返回空");
-            return null;
-        }
-
-        /// <summary>解析并缓存 IApplicationHost 在当前 AppHost 实现上的精确方法映射。</summary>
-        private AppHostResolverRuntime GetOrCreateAppHostResolverRuntime(Type appHostType)
-        {
-            if (appHostType == null)
-            {
-                return null;
-            }
-
-            var cached = appHostResolverRuntime;
-            if (cached != null && cached.AppHostType == appHostType)
-            {
-                return cached;
-            }
-
-            lock (runtimeLock)
-            {
-                cached = appHostResolverRuntime;
-                if (cached != null && cached.AppHostType == appHostType)
-                {
-                    return cached;
-                }
-
-                var resolve = ResolveInterfaceGenericMethod(appHostType, typeof(IApplicationHost), "Resolve", Type.EmptyTypes);
-                var tryResolve = ResolveInterfaceGenericMethod(appHostType, typeof(IApplicationHost), "TryResolve", Type.EmptyTypes);
-                var getExports = ResolveInterfaceGenericMethod(appHostType, typeof(IApplicationHost), "GetExports", new[] { typeof(bool) });
-
-                if (resolve == null || tryResolve == null || getExports == null)
-                {
-                    this.logger.Warn("IApplicationHost 服务解析入口缺失");
-                    return null;
-                }
-
-                cached = new AppHostResolverRuntime(appHostType, resolve, tryResolve, getExports);
-                appHostResolverRuntime = cached;
-                return cached;
-            }
-        }
-
-        /// <summary>从 IApplicationHost 接口映射到当前 AppHost 实现的精确泛型方法。</summary>
-        private static MethodInfo ResolveInterfaceGenericMethod(Type appHostType, Type interfaceType, string methodName, Type[] parameterTypes)
-        {
-            if (appHostType == null || interfaceType == null || !interfaceType.IsAssignableFrom(appHostType))
-            {
-                return null;
-            }
-
-            var interfaceMethod = interfaceType.GetMethod(methodName, parameterTypes ?? Type.EmptyTypes);
-            if (interfaceMethod == null || !interfaceMethod.IsGenericMethodDefinition)
-            {
-                return null;
-            }
-
-            var interfaceMap = appHostType.GetInterfaceMap(interfaceType);
-            for (var i = 0; i < interfaceMap.InterfaceMethods.Length; i++)
-            {
-                if (interfaceMap.InterfaceMethods[i] != interfaceMethod)
-                {
-                    continue;
-                }
-
-                var targetMethod = interfaceMap.TargetMethods[i];
-                if (targetMethod != null && targetMethod.IsGenericMethodDefinition)
-                {
-                    return targetMethod;
-                }
-            }
-
-            return null;
-        }
-
-        /// <summary>调用 IApplicationHost 的泛型解析方法，并兼容返回集合或单值的结果。</summary>
-        private object InvokeGenericResolver(object appHost, MethodInfo method, Type serviceType, params object[] args)
-        {
-            if (appHost == null || method == null || serviceType == null)
-            {
+                this.logger.Debug($"AudioFingerprintManager 实例创建失败: AppHost 不实现 {typeof(IServerApplicationHost).FullName}");
                 return null;
             }
 
             try
             {
-                var result = method.MakeGenericMethod(serviceType).Invoke(appHost, args);
-                return UnwrapServiceResolutionResult(result);
+                var applicationPaths = appHost.Resolve<IApplicationPaths>();
+                var ffmpegManager = appHost.Resolve<IFfmpegManager>();
+                var mediaEncoder = appHost.Resolve<IMediaEncoder>();
+                var mediaMountManager = appHost.Resolve<IMediaMountManager>();
+                var jsonSerializer = appHost.Resolve<IJsonSerializer>();
+
+                if (applicationPaths == null ||
+                    ffmpegManager == null ||
+                    mediaEncoder == null ||
+                    mediaMountManager == null ||
+                    jsonSerializer == null)
+                {
+                    this.logger.Debug(
+                        $"AudioFingerprintManager 实例创建失败: ctor 依赖缺失 paths={applicationPaths != null}, ffmpeg={ffmpegManager != null}, encoder={mediaEncoder != null}, mount={mediaMountManager != null}, json={jsonSerializer != null}");
+                    return null;
+                }
+
+                var ctorArgs = new object[]
+                {
+                    this.fileSystem,
+                    this.logger,
+                    applicationPaths,
+                    ffmpegManager,
+                    mediaEncoder,
+                    mediaMountManager,
+                    jsonSerializer,
+                    serverAppHost
+                };
+
+                this.logger.Debug($"AudioFingerprintManager 实例创建: {runtime.ManagerType.FullName}");
+                return runtime.ManagerConstructor.Invoke(ctorArgs);
             }
             catch (Exception ex)
             {
-                this.logger.Debug($"服务解析失败 {serviceType.FullName}: {method.Name}<T>() 异常: {ex.Message}");
+                this.logger.Debug($"AudioFingerprintManager 实例创建异常: {ex.Message}");
                 return null;
             }
-        }
-
-        /// <summary>将服务解析结果统一拆成单个服务实例。</summary>
-        private static object UnwrapServiceResolutionResult(object result)
-        {
-            if (result == null)
-            {
-                return null;
-            }
-
-            if (result is IEnumerable enumerable && result is not string)
-            {
-                foreach (var item in enumerable)
-                {
-                    return item;
-                }
-
-                return null;
-            }
-
-            return result;
         }
 
         /// <summary>串起 AudioFingerprint 的支持性检查、指纹生成与片头序列更新流程。</summary>
@@ -777,6 +720,20 @@ namespace MediaInfoKeeper.Services
             this.logger.Debug($"调用 {method.DeclaringType?.Name}.{method.Name} 参数: {string.Join(", ", parts)}");
         }
 
+        private static string BuildConstructorSignature(ConstructorInfo constructor)
+        {
+            if (constructor == null)
+            {
+                return "<null>";
+            }
+
+            var parameters = string.Join(",", constructor.GetParameters().Select(p => p.ParameterType.Name));
+            return string.Format(
+                "{0}..ctor({1})",
+                constructor.DeclaringType?.FullName ?? "<unknown>",
+                parameters);
+        }
+
         /// <summary>统一调用可能返回 Task 的反射方法，并在需要时取出其结果值。</summary>
         private static async Task<object> InvokeMethodAsync(object target, MethodInfo method, object[] args)
         {
@@ -796,30 +753,12 @@ namespace MediaInfoKeeper.Services
             return result;
         }
 
-        private sealed class AppHostResolverRuntime
-        {
-            public AppHostResolverRuntime(Type appHostType, MethodInfo resolve, MethodInfo tryResolve, MethodInfo getExports)
-            {
-                AppHostType = appHostType;
-                Resolve = resolve;
-                TryResolve = tryResolve;
-                GetExports = getExports;
-            }
-
-            public Type AppHostType { get; }
-
-            public MethodInfo Resolve { get; }
-
-            public MethodInfo TryResolve { get; }
-
-            public MethodInfo GetExports { get; }
-        }
-
         private sealed class AudioFingerprintRuntime
         {
             public AudioFingerprintRuntime(
                 Type managerType,
                 Type seasonFingerprintInfoType,
+                ConstructorInfo managerConstructor,
                 MethodInfo isIntroDetectionSupported,
                 MethodInfo createTitleFingerprintAsync,
                 MethodInfo getAllFingerprintFilesForSeason,
@@ -827,6 +766,7 @@ namespace MediaInfoKeeper.Services
             {
                 ManagerType = managerType;
                 SeasonFingerprintInfoType = seasonFingerprintInfoType;
+                ManagerConstructor = managerConstructor;
                 IsIntroDetectionSupported = isIntroDetectionSupported;
                 CreateTitleFingerprintAsync = createTitleFingerprintAsync;
                 GetAllFingerprintFilesForSeason = getAllFingerprintFilesForSeason;
@@ -836,6 +776,8 @@ namespace MediaInfoKeeper.Services
             public Type ManagerType { get; }
 
             public Type SeasonFingerprintInfoType { get; }
+
+            public ConstructorInfo ManagerConstructor { get; }
 
             public MethodInfo IsIntroDetectionSupported { get; }
 
