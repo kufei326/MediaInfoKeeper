@@ -121,11 +121,11 @@ namespace MediaInfoKeeper.Services
                     semaphoreHeld = true;
 
                     this.logger.Debug($"{source} 片头扫描: 开始片头检测 {episode.FileName ?? episode.Path} InternalId: {episode.InternalId}");
-                    await ScanEpisodeCoreAsync(episode, CancellationToken.None, null, null, null).ConfigureAwait(false);
+                    var detected = await ScanEpisodeCoreAsync(episode, CancellationToken.None, null, null, null).ConfigureAwait(false);
 
-                    if (!HasIntroMarkers(episode))
+                    if (!detected)
                     {
-                        this.logger.Info($"{source} 片头扫描: 未生成标记，2 分钟后重试 1 次");
+                        this.logger.Info($"{source} 片头扫描: 未完成音频指纹检测，2 分钟后重试 1 次");
                         if (semaphoreHeld)
                         {
                             introScanGate.Release();
@@ -299,7 +299,7 @@ namespace MediaInfoKeeper.Services
         }
 
         /// <summary>执行单个剧集的片头探测，并在成功后持久化标记结果。</summary>
-        private async Task ScanEpisodeCoreAsync(
+        private async Task<bool> ScanEpisodeCoreAsync(
             Episode episode,
             CancellationToken cancellationToken,
             int? total,
@@ -309,7 +309,7 @@ namespace MediaInfoKeeper.Services
             var displayName = episode?.FileName ?? episode?.Path;
             if (episode == null)
             {
-                return;
+                return false;
             }
 
             try
@@ -317,7 +317,7 @@ namespace MediaInfoKeeper.Services
                 if (HasIntroMarkers(episode))
                 {
                     this.logger.Info($"跳过 已存在片头标记: {displayName}");
-                    return;
+                    return true;
                 }
 
                 this.logger.Debug($"开始片头检测: {displayName}");
@@ -326,7 +326,7 @@ namespace MediaInfoKeeper.Services
                 stopwatch.Stop();
                 var hasMarkersAfterDetect = HasIntroMarkers(episode);
                 this.logger.Info(
-                    $"片头检测结果: 状态={(detected && hasMarkersAfterDetect ? "成功" : "失败")}, 已检测到={(detected ? "是" : "否")}, 已写入标记={(hasMarkersAfterDetect ? "是" : "否")}, 耗时={stopwatch.ElapsedMilliseconds}ms, 条目={displayName}");
+                    $"片头检测结果: 状态={(detected && hasMarkersAfterDetect ? "成功" : "失败")}, 已检测={(detected ? "是" : "否")}, 已写入标记={(hasMarkersAfterDetect ? "是" : "否")}, 耗时={stopwatch.ElapsedMilliseconds}ms, 条目={displayName}");
 
                 if (!detected)
                 {
@@ -341,6 +341,8 @@ namespace MediaInfoKeeper.Services
                 {
                     this.logger.Warn($"片头检测失败: reason=NoMarkerGenerated, item={displayName}");
                 }
+
+                return detected;
             }
             catch (OperationCanceledException)
             {
@@ -352,6 +354,7 @@ namespace MediaInfoKeeper.Services
                 this.logger.Error($"片头检测失败: {displayName}");
                 this.logger.Error(e.Message);
                 this.logger.Debug(e.StackTrace);
+                return false;
             }
             finally
             {
