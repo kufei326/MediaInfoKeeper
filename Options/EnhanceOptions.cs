@@ -164,6 +164,10 @@ namespace MediaInfoKeeper.Options
         [Description("让所有用户的媒体库顺序跟随首个管理员的 OrderedViews 配置。")]
         public bool EnforceLibraryOrder { get; set; } = false;
 
+        [DisplayName("优化新建媒体库默认设置")]
+        [Description("调整新建媒体库默认设置：TMDB 优先且独占启用，图片保存到媒体文件夹，字幕下载器默认关闭，章节自动生成默认关闭，语言地区默认中国中文。")]
+        public bool EnableLibrayProviderSettings { get; set; } = true;
+
         [DisplayName("日志来源黑名单")]
         [Description("按 logger.Name 匹配需要屏蔽的系统日志来源，支持逗号、分号或换行分隔。支持精确匹配；对于带动态后缀的来源可填写前缀，如 SessionsService-。")]
         public string SystemLogNameBlacklist { get; set; } = "HttpClient;TheMovieDb;SessionsService-;PlaystateService-;MediaInfoService-";
@@ -286,7 +290,8 @@ namespace MediaInfoKeeper.Options
                 nameof(EnableSeriesTotalEpisodeCount),
                 nameof(EnablePlaybackMediaSourceName),
                 nameof(NoBoxsetsAutoCreation),
-                nameof(EnforceLibraryOrder));
+                nameof(EnforceLibraryOrder),
+                nameof(EnableLibrayProviderSettings));
 
             AddGroup("日志", "",
                 nameof(EnableDetailedNetworkRequestLogging),

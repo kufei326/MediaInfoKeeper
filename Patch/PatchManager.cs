@@ -539,6 +539,19 @@ namespace MediaInfoKeeper.Patch
 
             registrations.Add(new PatchRegistration
             {
+                Name = "LibrayProviderSettings",
+                Initialize = options => LibrayProviderSettings.Initialize(
+                    logger,
+                    options.Enhance.EnableLibrayProviderSettings),
+                Configure = options => LibrayProviderSettings.Configure(
+                    IsPluginEnabled(options) && options.Enhance.EnableLibrayProviderSettings),
+                IsEnabled = options => IsPluginEnabled(options) && options.Enhance.EnableLibrayProviderSettings,
+                IsReady = () => LibrayProviderSettings.IsReady,
+                Notes = () => "prefer TheMovieDb defaults"
+            });
+
+            registrations.Add(new PatchRegistration
+            {
                 Name = "NotificationSystem",
                 Initialize = _ => NotificationSystem.Initialize(logger),
                 Configure = _ => { },
