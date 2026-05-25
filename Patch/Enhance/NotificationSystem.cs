@@ -59,7 +59,8 @@ namespace MediaInfoKeeper.Patch
         private static bool IsTakeOverLibraryNewEnabled()
         {
             return Plugin.Instance?.Options?.MainPage?.PlugginEnabled == true &&
-                   Plugin.Instance.Options.Enhance?.EnableNotificationEnhance == true;
+                   Plugin.Instance.Options.Enhance?.EnableNotificationEnhance == true &&
+                   Plugin.Instance.Options.Enhance?.TakeOverSystemLibraryNew == true;
         }
 
         public static void Initialize(ILogger pluginLogger)

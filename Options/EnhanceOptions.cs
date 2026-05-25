@@ -102,7 +102,7 @@ namespace MediaInfoKeeper.Options
         public bool EnableNotificationEnhance { get; set; } = true;
         
         [DisplayName("接管系统新入库通知")]
-        [Description("开启后插件接管 Emby 的 library.new 事件并屏蔽系统原生新入库通知，仅对已收藏/喜爱的剧集新入库集发送通知；关闭则插件使用 favorites.update 事件，不影响 Emby 原有的新入库通知。")]
+        [Description("关闭时不接管 Emby 原生新入库通知，收藏剧集更新使用插件的 favorites.update 通知；开启时屏蔽 Emby 原生 library.new 通知，并让收藏剧集更新改用 library.new 通知。")]
         public bool TakeOverSystemLibraryNew { get; set; } = false;
         
         [DisplayName("优化封面显示")]
