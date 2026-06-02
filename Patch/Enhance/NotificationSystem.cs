@@ -290,6 +290,11 @@ namespace MediaInfoKeeper.Patch
         {
             __state = null;
 
+            if (__instance?.IsScanRunning == true)
+            {
+                return;
+            }
+
             if (options.DeleteFileLocation && Plugin.LibraryService != null)
             {
                 var collectionFolder = options.CollectionFolders ?? __instance.GetCollectionFolders(item);

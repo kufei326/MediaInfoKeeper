@@ -168,6 +168,12 @@ namespace MediaInfoKeeper.Patch
 
             Task.Run(() =>
             {
+                if (Plugin.LibraryManager?.IsScanRunning == true)
+                {
+                    logger?.Warn("DeepDelete - 库扫描运行中，跳过本地深度删除。");
+                    return;
+                }
+
                 var allCount = __state.MountPaths.Count;
                 var localMountPaths = new HashSet<string>(__state.MountPaths
                     .Where(kv => kv.Value)
@@ -198,6 +204,12 @@ namespace MediaInfoKeeper.Patch
 
             if (options == null || item == null || Plugin.LibraryService == null)
             {
+                return null;
+            }
+
+            if (libraryManager?.IsScanRunning == true)
+            {
+                logger?.Warn("DeepDelete - 库扫描运行中，跳过深度删除准备。Item={0}", item.Name);
                 return null;
             }
 
