@@ -17,8 +17,35 @@ namespace MediaInfoKeeper.Patch
     /// </summary>
     public static class EmbeddedChapterMarkerMap
     {
-        private static readonly string[] IntroNames = { "intro", "opening" };
-        private static readonly string[] CreditsNames = { "credits", "credit", "ending", "end credits" };
+        private static readonly HashSet<string> IntroNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "intro",
+            "opening",
+            "op",
+            "片头",
+            "片头曲",
+            "オープニング",
+            "vorspann",
+            "opening credits",
+            "오프닝"
+        };
+
+        private static readonly HashSet<string> CreditsNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "credits",
+            "end credits",
+            "outro",
+            "ending",
+            "ed",
+            "片尾",
+            "片尾曲",
+            "演职员表",
+            "エンディング",
+            "スタッフロール",
+            "abspann",
+            "엔딩",
+            "크레딧"
+        };
 
         private static Harmony harmony;
         private static ILogger logger;
@@ -194,7 +221,7 @@ namespace MediaInfoKeeper.Patch
                     continue;
                 }
 
-                if (IntroNames.Contains(normalizedName, StringComparer.Ordinal))
+                if (IntroNames.Contains(normalizedName))
                 {
                     var hasIntroStart = pair.Chapter.MarkerType == MarkerType.IntroStart;
                     if (pair.Chapter.MarkerType == MarkerType.Chapter)
@@ -228,7 +255,7 @@ namespace MediaInfoKeeper.Patch
                     continue;
                 }
 
-                if (CreditsNames.Contains(normalizedName, StringComparer.Ordinal) &&
+                if (CreditsNames.Contains(normalizedName) &&
                     pair.Chapter.MarkerType == MarkerType.Chapter)
                 {
                     pair.Chapter.MarkerType = MarkerType.CreditsStart;
@@ -292,7 +319,7 @@ namespace MediaInfoKeeper.Patch
         {
             return string.IsNullOrWhiteSpace(name)
                 ? null
-                : name.Trim().ToLowerInvariant();
+                : name.Trim();
         }
 
         private static string FormatTicks(long ticks)
