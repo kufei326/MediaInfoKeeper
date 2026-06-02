@@ -4,9 +4,12 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using MediaBrowser.Controller.Entities;
+using MediaBrowser.Controller.Entities.Movies;
 using MediaBrowser.Controller.Entities.TV;
 using MediaBrowser.Controller.Library;
+using MediaBrowser.Controller.Persistence;
 using MediaBrowser.Controller.Providers;
+using MediaBrowser.Model.Entities;
 using MediaBrowser.Model.Logging;
 using MediaBrowser.Model.Tasks;
 using MediaInfoKeeper.Common;
@@ -17,6 +20,15 @@ namespace MediaInfoKeeper.ScheduledTask
 {
     public class RefreshRecentMetadataTask : IScheduledTask
     {
+        private sealed class RoleRefreshTarget
+        {
+            public long ItemId { get; set; }
+
+            public string Name { get; set; }
+
+            public int? ProductionYear { get; set; }
+        }
+
         private readonly ILogger logger;
         private readonly ILibraryManager libraryManager;
 
@@ -49,15 +61,9 @@ namespace MediaInfoKeeper.ScheduledTask
             var replaceMetadata = ShouldReplaceMetadata();
             var replaceImages = ShouldReplaceImages();
             var replaceThumbnails = ShouldReplaceThumbnails();
-            var metadataRefreshItemIds = Plugin.Instance.Options.MetaData.EnablePersonRoleDoubanFallback
-                ? CollectMetadataRefreshItemIds(items)
-                : new List<long>();
-            var totalWork = total + metadataRefreshItemIds.Count;
+            var metadataRefreshTargets = CollectMetadataRefreshItemIds(items);
+            var totalWork = total + metadataRefreshTargets.Count;
             this.logger.Info($"计划任务条目数{total}，元数据覆盖{replaceMetadata}，图片覆盖{replaceImages}，视频缩略图覆盖{replaceThumbnails}");
-            if (metadataRefreshItemIds.Count > 0)
-            {
-                this.logger.Info($"计划任务额外刷新剧集元数据 {metadataRefreshItemIds.Count} 个 series itemid（豆瓣角色中文化）");
-            }
 
             var completed = 0;
             var tasks = items
@@ -65,11 +71,7 @@ namespace MediaInfoKeeper.ScheduledTask
                 {
                     try
                     {
-                        if (cancellationToken.IsCancellationRequested)
-                        {
-                            return;
-                        }
-
+                        cancellationToken.ThrowIfCancellationRequested();
                         await ProcessItemAsync(item, replaceMetadata, replaceImages, replaceThumbnails, cancellationToken)
                             .ConfigureAwait(false);
                     }
@@ -85,35 +87,37 @@ namespace MediaInfoKeeper.ScheduledTask
                     }
                     finally
                     {
-                        var done = Interlocked.Increment(ref completed);
-                        progress?.Report(done / (double)totalWork * 100);
+                        ReportProgress(totalWork, progress, Interlocked.Increment(ref completed));
                     }
                 })
                 .ToList();
             await Task.WhenAll(tasks).ConfigureAwait(false);
 
-            foreach (var itemId in metadataRefreshItemIds)
+            if (metadataRefreshTargets.Count > 0)
+            {
+                this.logger.Info($"计划任务刷新豆瓣角色中文化 {metadataRefreshTargets.Count} 个 Movie/Series itemid");
+            }
+            foreach (var target in metadataRefreshTargets)
             {
                 try
                 {
                     cancellationToken.ThrowIfCancellationRequested();
-                    await RefreshMetadataForDoubanRoleAsync(itemId, cancellationToken).ConfigureAwait(false);
+                    await RefreshMetadataForDoubanRoleAsync(target, cancellationToken).ConfigureAwait(false);
                 }
                 catch (OperationCanceledException)
                 {
-                    this.logger.Info($"计划任务已取消 itemid={itemId}");
+                    this.logger.Info($"计划任务已取消 itemid={target.ItemId}");
                     throw;
                 }
                 catch (Exception e)
                 {
-                    this.logger.Error($"计划任务刷新剧集元数据失败: itemid={itemId}");
+                    this.logger.Error($"计划任务刷新豆瓣演员角色元数据失败: itemid={target.ItemId}");
                     this.logger.Error(e.Message);
                     this.logger.Debug(e.StackTrace);
                 }
                 finally
                 {
-                    var done = Interlocked.Increment(ref completed);
-                    progress?.Report(done / (double)totalWork * 100);
+                    ReportProgress(totalWork, progress, Interlocked.Increment(ref completed));
                 }
             }
 
@@ -202,16 +206,18 @@ namespace MediaInfoKeeper.ScheduledTask
             // }
         }
 
-        private async Task RefreshMetadataForDoubanRoleAsync(long itemId, CancellationToken cancellationToken)
+        private async Task RefreshMetadataForDoubanRoleAsync(RoleRefreshTarget target, CancellationToken cancellationToken)
         {
-            var item = this.libraryManager.GetItemById(itemId) as BaseItem;
+            var item = this.libraryManager.GetItemById(target.ItemId) as BaseItem;
             if (item == null)
             {
-                this.logger.Info($"跳过剧集元数据刷新: 未找到 itemid={itemId}");
+                this.logger.Info($"跳过演员角色元数据刷新: 未找到 {FormatItemLabel(target.Name, target.ProductionYear)} itemid={target.ItemId}");
                 return;
             }
 
-            this.logger.Info($"刷新剧集元数据 {item.Name} ({item.ProductionYear})");
+            this.logger.Info($"刷新演员角色元数据 {FormatItemLabel(item.Name, item.ProductionYear)}");
+
+            var beforeRoles = BuildPeopleRoleMap(this.libraryManager.GetItemPeople(item));
 
             var options = BuildRefreshOptions(replaceMetadata: true, replaceImages: false, replaceThumbnails: false);
             options.Recursive = false;
@@ -223,30 +229,216 @@ namespace MediaInfoKeeper.ScheduledTask
                         .RefreshSingleItem(item, options, collectionFolders, libraryOptions, cancellationToken),
                     cancellationToken)
                 .ConfigureAwait(false);
+
+            var afterRoles = BuildPeopleRoleMap(this.libraryManager.GetItemPeople(item));
+            var updatedRoles = afterRoles
+                .Where(entry =>
+                    entry.Value.HasChineseRole &&
+                    beforeRoles.TryGetValue(entry.Key, out var before) &&
+                    !string.Equals(before.Role, entry.Value.Role, StringComparison.Ordinal))
+                .Select(entry =>
+                {
+                    var before = beforeRoles[entry.Key];
+                    return $"{entry.Value.Name}: {FormatRoleValue(before.Role)} -> {FormatRoleValue(entry.Value.Role)}";
+                })
+                .ToList();
+
+            if (updatedRoles.Count > 0)
+            {
+                this.logger.Info($"豆瓣演员角色已更新 {FormatItemLabel(item.Name, item.ProductionYear)}: {string.Join(", ", updatedRoles)}");
+            }
+
+            if (item is Series series)
+            {
+                PropagateSeriesPeopleRoles(series);
+            }
         }
 
-        private List<long> CollectMetadataRefreshItemIds(IEnumerable<BaseItem> items)
+        private List<RoleRefreshTarget> CollectMetadataRefreshItemIds(IEnumerable<BaseItem> items)
         {
-            var result = new List<long>();
+            var result = new List<RoleRefreshTarget>();
             var seen = new HashSet<long>();
 
             foreach (var item in items)
             {
-                var refreshItemId = item switch
+                BaseItem refreshItem = item switch
                 {
-                    Series series => series.InternalId,
-                    Season season when season.Series?.InternalId > 0 => season.Series.InternalId,
-                    Episode episode when episode.Series?.InternalId > 0 => episode.Series.InternalId,
-                    _ => 0
+                    Movie movie when movie.InternalId > 0 => movie,
+                    Series series when series.InternalId > 0 => series,
+                    Season season when season.Series?.InternalId > 0 => season.Series,
+                    Episode episode when episode.Series?.InternalId > 0 => episode.Series,
+                    _ => null
                 };
 
-                if (refreshItemId > 0 && seen.Add(refreshItemId))
+                if (!IsDoubanRoleEnabled(refreshItem))
                 {
-                    result.Add(refreshItemId);
+                    continue;
+                }
+
+                if (seen.Add(refreshItem.InternalId))
+                {
+                    result.Add(new RoleRefreshTarget
+                    {
+                        ItemId = refreshItem.InternalId,
+                        Name = refreshItem.Name,
+                        ProductionYear = refreshItem.ProductionYear
+                    });
                 }
             }
 
             return result;
+        }
+
+        private void PropagateSeriesPeopleRoles(Series series)
+        {
+            if (!IsDoubanRoleEnabled(series))
+            {
+                return;
+            }
+
+            var seriesPeople = this.libraryManager.GetItemPeople(series);
+            if (seriesPeople == null || seriesPeople.Count == 0)
+            {
+                return;
+            }
+
+            var roleMap = seriesPeople
+                .Where(p => p != null &&
+                            (p.Type == PersonType.Actor || p.Type == PersonType.GuestStar) &&
+                            LanguageUtility.IsChinese(p.Role))
+                .GroupBy(p => NormalizePersonName(p.Name), StringComparer.OrdinalIgnoreCase)
+                .Where(g => !string.IsNullOrWhiteSpace(g.Key))
+                .ToDictionary(g => g.Key, g => g.First().Role, StringComparer.OrdinalIgnoreCase);
+
+            if (roleMap.Count == 0)
+            {
+                return;
+            }
+
+            var children = this.libraryManager.GetItemList(new InternalItemsQuery
+            {
+                SeriesIds = new[] { series.InternalId },
+                IncludeItemTypes = new[] { nameof(Season), nameof(Episode) },
+                Recursive = true
+            });
+
+            foreach (var child in children)
+            {
+                var people = this.libraryManager.GetItemPeople(child);
+                if (people == null || people.Count == 0)
+                {
+                    continue;
+                }
+
+                if (!TryApplySeriesRoleMap(people, roleMap))
+                {
+                    continue;
+                }
+
+                Plugin.Instance.ItemRepository.UpdatePeople(child.InternalId, people);
+            }
+
+        }
+
+        private bool IsDoubanRoleEnabled(BaseItem item)
+        {
+            if (item == null)
+            {
+                return false;
+            }
+
+            var libraryOptions = this.libraryManager.GetLibraryOptions(item);
+            return libraryOptions != null &&
+                   item.IsMetadataFetcherEnabled(libraryOptions, Provider.DoubanRoleProvider.ProviderName);
+        }
+
+        private static bool TryApplySeriesRoleMap(
+            IEnumerable<PersonInfo> people,
+            IReadOnlyDictionary<string, string> roleMap)
+        {
+            var changed = false;
+            foreach (var person in people)
+            {
+                if (!ShouldUpdateChildPersonRole(person, roleMap, out var chineseRole))
+                {
+                    continue;
+                }
+
+                person.Role = chineseRole;
+                changed = true;
+            }
+
+            return changed;
+        }
+
+        private static bool ShouldUpdateChildPersonRole(
+            PersonInfo person,
+            IReadOnlyDictionary<string, string> roleMap,
+            out string chineseRole)
+        {
+            chineseRole = null;
+            if (person == null || (person.Type != PersonType.Actor && person.Type != PersonType.GuestStar))
+            {
+                return false;
+            }
+
+            var normalizedName = NormalizePersonName(person.Name);
+            if (string.IsNullOrWhiteSpace(normalizedName) ||
+                !roleMap.TryGetValue(normalizedName, out chineseRole) ||
+                !LanguageUtility.IsChinese(chineseRole) ||
+                string.Equals(person.Role, chineseRole, StringComparison.Ordinal))
+            {
+                chineseRole = null;
+                return false;
+            }
+
+            return true;
+        }
+
+        private static string NormalizePersonName(string name)
+        {
+            return string.IsNullOrWhiteSpace(name)
+                ? null
+                : name.Trim().Replace("·", string.Empty).Replace(" ", string.Empty);
+        }
+
+        private static Dictionary<string, (string Name, string Role, bool HasChineseRole)> BuildPeopleRoleMap(IEnumerable<PersonInfo> people)
+        {
+            var result = new Dictionary<string, (string Name, string Role, bool HasChineseRole)>(StringComparer.OrdinalIgnoreCase);
+            foreach (var person in people ?? Enumerable.Empty<PersonInfo>())
+            {
+                if (person == null || (person.Type != PersonType.Actor && person.Type != PersonType.GuestStar))
+                {
+                    continue;
+                }
+
+                var normalizedName = NormalizePersonName(person.Name);
+                if (string.IsNullOrWhiteSpace(normalizedName))
+                {
+                    continue;
+                }
+
+                result[normalizedName] = (person.Name, person.Role, LanguageUtility.IsChinese(person.Role));
+            }
+
+            return result;
+        }
+
+        private static string FormatItemLabel(string name, int? productionYear)
+        {
+            return productionYear.HasValue
+                ? $"{name} ({productionYear.Value})"
+                : name ?? string.Empty;
+        }
+
+        private static string FormatRoleValue(string role)
+        {
+            return string.IsNullOrWhiteSpace(role) ? "空" : role;
+        }
+
+        private static void ReportProgress(int totalWork, IProgress<double> progress, int completed)
+        {
+            progress?.Report(completed / (double)totalWork * 100);
         }
 
         private bool ShouldReplaceMetadata()

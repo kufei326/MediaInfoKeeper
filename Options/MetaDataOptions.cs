@@ -72,14 +72,6 @@ namespace MediaInfoKeeper.Options
         [Description("开启后在剧集目录读取 episodegroup.json；当在线剧集组可用时会自动写入本地文件用于后续复用。")]
         public bool EnableLocalEpisodeGroup { get; set; } = false;
 
-        [DisplayName("豆瓣角色中文化")]
-        [Description("刷新元数据时，演员角色为空或非中文，会尝试豆瓣演员表补全中文角色名。")]
-        public bool EnablePersonRoleDoubanFallback { get; set; } = true;
-
-        [DisplayName("写入豆瓣链接")]
-        [Description("IMDb 反查豆瓣后，将豆瓣 subject id 写入条目数据库，用于显示豆瓣外链。")]
-        public bool EnableDoubanLinkWriteback { get; set; } = true;
-        
         [DisplayName("加载 dd-danmaku 弹幕js")]
         [Description("修改 index.html，注入 ede.js")]
         public bool EnableDanmakuJs { get; set; } = false;
@@ -231,10 +223,6 @@ namespace MediaInfoKeeper.Options
                 nameof(EnableMissingEpisodesEnhance),
                 nameof(EnableLocalEpisodeGroup));
 
-            AddGroup("Douban", "",
-                nameof(EnablePersonRoleDoubanFallback),
-                nameof(EnableDoubanLinkWriteback));
-            
             AddGroup("Danmaku", "",
                 nameof(EnableDanmakuJs),
                 nameof(EnableDanmuApi),

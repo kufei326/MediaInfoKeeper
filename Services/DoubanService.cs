@@ -7,6 +7,7 @@ using System.Text.RegularExpressions;
 using MediaBrowser.Controller.Entities;
 using MediaBrowser.Controller.Entities.Movies;
 using MediaBrowser.Controller.Entities.TV;
+using MediaBrowser.Controller.Providers;
 using MediaBrowser.Model.Entities;
 using MediaInfoKeeper.Common;
 using MediaInfoKeeper.External;
@@ -15,6 +16,11 @@ namespace MediaInfoKeeper.Services
 {
     internal static class DoubanService
     {
+        internal sealed class DoubanMetadataPayload
+        {
+            public string DoubanSubjectId { get; set; }
+        }
+
         private sealed class DoubanSearchResponse
         {
             public List<DoubanSearchItem> items { get; set; }
@@ -86,24 +92,20 @@ namespace MediaInfoKeeper.Services
         private static readonly ConcurrentDictionary<string, CacheEntry<string>> DoubanImdbSubjectCache =
             new ConcurrentDictionary<string, CacheEntry<string>>(StringComparer.OrdinalIgnoreCase);
 
-        public static void EnhancePeopleRole(BaseItem item, List<PersonInfo> people)
+        public static bool EnhancePeopleRole(BaseItem item, List<PersonInfo> people)
         {
             if (item == null || people == null || people.Count == 0)
             {
-                return;
-            }
-
-            if (Plugin.Instance?.Options?.MetaData?.EnablePersonRoleDoubanFallback != true)
-            {
-                return;
+                return false;
             }
 
             var doubanCelebrities = GetDoubanCelebrities(item);
             if (doubanCelebrities == null || doubanCelebrities.Count == 0)
             {
-                return;
+                return false;
             }
 
+            var changed = false;
             foreach (var person in people)
             {
                 if (!ShouldHandlePerson(person))
@@ -123,8 +125,38 @@ namespace MediaInfoKeeper.Services
                     continue;
                 }
 
-                person.Role = chineseRole;
+                if (!string.Equals(person.Role, chineseRole, StringComparison.Ordinal))
+                {
+                    person.Role = chineseRole;
+                    changed = true;
+                }
             }
+
+            return changed;
+        }
+
+        public static DoubanMetadataPayload ResolveDoubanMetadata(ItemLookupInfo lookupInfo)
+        {
+            if (lookupInfo == null)
+            {
+                return null;
+            }
+
+            var context = BuildLookupContext(lookupInfo);
+            if (context == null || string.IsNullOrWhiteSpace(context.DoubanSubjectId))
+            {
+                return null;
+            }
+
+            if (string.IsNullOrWhiteSpace(context.DoubanSubjectId))
+            {
+                return null;
+            }
+
+            return new DoubanMetadataPayload
+            {
+                DoubanSubjectId = context.DoubanSubjectId
+            };
         }
 
         private static bool ShouldHandlePerson(PersonInfo person)
@@ -136,6 +168,11 @@ namespace MediaInfoKeeper.Services
         private static List<DoubanCelebrity> GetDoubanCelebrities(BaseItem item)
         {
             var context = BuildMediaLookupContext(item);
+            return GetDoubanCelebrities(context);
+        }
+
+        private static List<DoubanCelebrity> GetDoubanCelebrities(MediaLookupContext context)
+        {
             if (context == null || string.IsNullOrWhiteSpace(context.DoubanSubjectId))
             {
                 return null;
@@ -179,6 +216,44 @@ namespace MediaInfoKeeper.Services
             }
         }
 
+        private static MediaLookupContext BuildLookupContext(ItemLookupInfo info)
+        {
+            if (info == null)
+            {
+                return null;
+            }
+
+            if (info is MovieInfo movieInfo)
+            {
+                return BuildLookupContextCore(movieInfo, "movie");
+            }
+
+            if (info is SeriesInfo seriesInfo)
+            {
+                return BuildLookupContextCore(seriesInfo, "tv");
+            }
+
+            if (info is SeasonInfo seasonInfo)
+            {
+                return BuildLookupContextCore(
+                    seasonInfo,
+                    "tv",
+                    seasonInfo.SeriesProviderIds,
+                    seasonInfo.SeriesName);
+            }
+
+            if (info is EpisodeInfo episodeInfo)
+            {
+                return BuildLookupContextCore(
+                    episodeInfo,
+                    "tv",
+                    episodeInfo.SeriesProviderIds,
+                    episodeInfo.Name);
+            }
+
+            return null;
+        }
+
         private static MediaLookupContext BuildMediaLookupContext(BaseItem item)
         {
             if (item == null)
@@ -212,6 +287,41 @@ namespace MediaInfoKeeper.Services
             }
 
             var subjectId = ResolveDoubanSubjectId(lookupItem, subjectType);
+            if (string.IsNullOrWhiteSpace(subjectId))
+            {
+                return null;
+            }
+
+            return new MediaLookupContext
+            {
+                DoubanSubjectId = subjectId,
+                DoubanSubjectType = subjectType,
+                CacheKey = subjectType + ":" + subjectId
+            };
+        }
+
+        private static MediaLookupContext BuildLookupContextCore(
+            ItemLookupInfo info,
+            string subjectType,
+            IReadOnlyDictionary<string, string> providerIdsOverride = null,
+            string nameOverride = null)
+        {
+            var providerId = GetProviderId(providerIdsOverride ?? info.ProviderIds, "Douban", "douban", "DoubanId", "doubanid");
+            var subjectId = NormalizeDoubanSubjectId(providerId);
+            if (string.IsNullOrWhiteSpace(subjectId))
+            {
+                var imdbId = GetProviderId(providerIdsOverride ?? info.ProviderIds, MetadataProviders.Imdb.ToString(), "Imdb", "imdb");
+                if (!string.IsNullOrWhiteSpace(imdbId))
+                {
+                    subjectId = GetDoubanSubjectFromImdb(imdbId);
+                }
+            }
+
+            if (string.IsNullOrWhiteSpace(subjectId))
+            {
+                subjectId = SearchDoubanSubject(nameOverride ?? info.Name, info.Year, subjectType);
+            }
+
             if (string.IsNullOrWhiteSpace(subjectId))
             {
                 return null;
@@ -290,12 +400,17 @@ namespace MediaInfoKeeper.Services
         private static string SearchDoubanSubject(BaseItem item, string subjectType)
         {
             var title = item?.Name?.Trim();
+            return SearchDoubanSubject(title, item?.ProductionYear, subjectType);
+        }
+
+        private static string SearchDoubanSubject(string title, int? productionYear, string subjectType)
+        {
             if (string.IsNullOrWhiteSpace(title))
             {
                 return null;
             }
 
-            var query = item.ProductionYear.HasValue ? title + " " + item.ProductionYear.Value : title;
+            var query = productionYear.HasValue ? title + " " + productionYear.Value : title;
             var body = DoubanApiClient.GetJson(DoubanApiClient.BuildSearchUrl(query));
             if (string.IsNullOrWhiteSpace(body))
             {
@@ -317,9 +432,9 @@ namespace MediaInfoKeeper.Services
                         continue;
                     }
 
-                    if (item.ProductionYear.HasValue &&
+                    if (productionYear.HasValue &&
                         !string.IsNullOrWhiteSpace(candidate.target?.year) &&
-                        !string.Equals(candidate.target.year, item.ProductionYear.Value.ToString(), StringComparison.Ordinal))
+                        !string.Equals(candidate.target.year, productionYear.Value.ToString(), StringComparison.Ordinal))
                     {
                         continue;
                     }
@@ -432,11 +547,6 @@ namespace MediaInfoKeeper.Services
                 return;
             }
 
-            if (Plugin.Instance?.Options?.MetaData?.EnableDoubanLinkWriteback != true)
-            {
-                return;
-            }
-
             var existing = GetProviderId(item, DoubanExternalId.StaticName, "douban", "DoubanId", "doubanid");
             if (string.Equals(NormalizeDoubanSubjectId(existing), normalizedSubjectId, StringComparison.Ordinal))
             {
@@ -475,6 +585,24 @@ namespace MediaInfoKeeper.Services
             {
                 var providerId = item.GetProviderId(key);
                 if (!string.IsNullOrWhiteSpace(providerId))
+                {
+                    return providerId;
+                }
+            }
+
+            return null;
+        }
+
+        private static string GetProviderId(IReadOnlyDictionary<string, string> providerIds, params string[] keys)
+        {
+            if (providerIds == null)
+            {
+                return null;
+            }
+
+            foreach (var key in keys)
+            {
+                if (providerIds.TryGetValue(key, out var providerId) && !string.IsNullOrWhiteSpace(providerId))
                 {
                     return providerId;
                 }
