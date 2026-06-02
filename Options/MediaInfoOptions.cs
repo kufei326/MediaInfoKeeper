@@ -17,7 +17,7 @@ namespace MediaInfoKeeper.Options
         [DisplayName("入库时提取媒体信息")]
         [Description("入库时若 JSON 不存在或恢复失败，提取媒体信息并写入 JSON。")]
         public bool ExtractMediaInfoOnItemAdded { get; set; } = true;
-
+        
         [DisplayName("条目移除时删除 JSON")]
         [Description("启用后，条目移除时删除已持久化的 JSON。")]
         public bool DeleteMediaInfoJsonOnRemove { get; set; } = false;
@@ -25,6 +25,10 @@ namespace MediaInfoKeeper.Options
         [DisplayName("启用 MediaInfo 预加载")]
         [Description("播放剧集时，预加载下一集媒体信息；关闭后不再自动预加载。")]
         public bool EnableMediaInfoPrefetch { get; set; } = true;
+
+        [DisplayName("浏览剧集提取媒体信息")]
+        [Description("浏览视频或音频详情接口时，若条目没有媒体信息，则后台提取并写入 JSON。")]
+        public bool ExtractMediaInfoOnItemDetail { get; set; } = false;
 
         [DisplayName("MediaInfo JSON 存储根目录")]
         [Description("默认使用 Emby的 /config/data/MediaInfoKeeper 子目录保存。视频等媒体保存在 /your-path/FileNameWithoutExtension-mediainfo.json；音频保存在 /your-path/music/FileNameWithoutExtension-mediainfo.json。若当前值为空，JSON 保存到媒体文件同目录。")]

@@ -1,6 +1,12 @@
-﻿using System.Collections.Generic;
+﻿using System;
+using System.Collections.Generic;
 using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
+using MediaInfoKeeper.Patch;
+using MediaInfoKeeper.Store;
 using MediaBrowser.Controller.Entities;
+using MediaBrowser.Controller.Entities.Audio;
 using MediaBrowser.Controller.Library;
 using MediaBrowser.Controller.Providers;
 using MediaBrowser.Model.Dto;
@@ -81,6 +87,75 @@ namespace MediaInfoKeeper.Services
                 EnableThumbnailImageExtraction = Plugin.Instance.Options.MetaData.EnableImageCapture,
                 EnableSubtitleDownloading = false
             };
+        }
+
+        /// <summary>为单个视频或音频条目提取媒体信息。</summary>
+        public async Task<bool> ExtractMediaInfoAsync(BaseItem item, string source, CancellationToken cancellationToken = default)
+        {
+            if (!(item is Video) && !(item is Audio))
+            {
+                return false;
+            }
+
+            var displayName = item.FileName ?? item.Path ?? item.Name;
+            using (FfProcessGuard.Allow())
+            {
+                var filePath = item.Path;
+                if (string.IsNullOrEmpty(filePath))
+                {
+                    this.logger.Info($"{source} 提取媒体信息跳过 无路径: {displayName}");
+                    return false;
+                }
+
+                var refreshOptions = GetMediaInfoRefreshOptions();
+                var directoryService = refreshOptions.DirectoryService;
+
+                if (Uri.TryCreate(filePath, UriKind.Absolute, out var uri) && uri.IsAbsoluteUri &&
+                    uri.Scheme == Uri.UriSchemeFile)
+                {
+                    var file = directoryService.GetFile(filePath);
+                    if (file?.Exists != true)
+                    {
+                        this.logger.Info($"{source} 提取媒体信息跳过 文件不存在: {displayName}");
+                        return false;
+                    }
+                }
+
+                var deserializeResult = Plugin.MediaSourceInfoStore.ApplyToItem(item);
+                if (item is Video)
+                {
+                    Plugin.ChaptersStore.ApplyToItem(item);
+                }
+                else if (item is Audio)
+                {
+                    Plugin.EmbeddedInfoStore.ApplyToItem(item);
+                }
+
+                if (deserializeResult == MediaInfoDocument.MediaInfoRestoreResult.Restored ||
+                    deserializeResult == MediaInfoDocument.MediaInfoRestoreResult.AlreadyExists)
+                {
+                    this.logger.Info($"{source} 提取媒体信息继续执行刷新: {displayName}");
+                }
+
+                var collectionFolders = this.libraryManager.GetCollectionFolders(item).Cast<BaseItem>().ToArray();
+                var libraryOptions = this.libraryManager.GetLibraryOptions(item);
+                var copiedOptions = LibraryService.CopyLibraryOptions(libraryOptions);
+
+                item.DateLastRefreshed = new DateTimeOffset();
+                await RefreshTaskRunner.RunAsync(
+                        () => Plugin.ProviderManager
+                            .RefreshSingleItem(item, refreshOptions, collectionFolders, copiedOptions, cancellationToken),
+                        cancellationToken)
+                    .ConfigureAwait(false);
+
+                if (!HasMediaInfo(item))
+                {
+                    this.logger.Info($"{source} 提取媒体信息失败 无媒体流: {displayName}");
+                    return false;
+                }
+
+                return true;
+            }
         }
 
         /// <summary>获取指定条目的静态媒体源。</summary>

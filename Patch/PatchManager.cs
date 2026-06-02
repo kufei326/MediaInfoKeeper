@@ -205,6 +205,18 @@ namespace MediaInfoKeeper.Patch
 
             registrations.Add(new PatchRegistration
             {
+                Name = "DetailTriggerMediaInfo",
+                Initialize = options => DetailTriggerMediaInfo.Initialize(
+                    logger,
+                    IsPluginEnabled(options) && options.GetMediaInfoOptions().ExtractMediaInfoOnItemDetail),
+                Configure = options => DetailTriggerMediaInfo.Configure(
+                    IsPluginEnabled(options) && options.GetMediaInfoOptions().ExtractMediaInfoOnItemDetail),
+                IsEnabled = options => IsPluginEnabled(options) && options.GetMediaInfoOptions().ExtractMediaInfoOnItemDetail,
+                IsReady = () => DetailTriggerMediaInfo.IsReady
+            });
+
+            registrations.Add(new PatchRegistration
+            {
                 Name = "LibraryMonitorDelay",
                 Initialize = options => LibraryMonitorDelay.Initialize(
                     logger,

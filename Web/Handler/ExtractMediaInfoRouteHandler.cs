@@ -1,13 +1,8 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Threading;
 using System.Threading.Tasks;
 using MediaBrowser.Controller.Entities;
-using MediaBrowser.Controller.Entities.Audio;
-using MediaInfoKeeper.Patch;
-using MediaInfoKeeper.Services;
-using MediaInfoKeeper.Store;
 
 namespace MediaInfoKeeper.Web.Handler
 {
@@ -79,68 +74,9 @@ namespace MediaInfoKeeper.Web.Handler
 
         private static async Task<bool> ExtractSingleItemAsync(BaseItem item)
         {
-            if (!(item is Video) && !(item is Audio))
-            {
-                return false;
-            }
-
-            var displayName = item.FileName ?? item.Path ?? item.Name;
-            using (FfProcessGuard.Allow())
-            {
-                var filePath = item.Path;
-                if (string.IsNullOrEmpty(filePath))
-                {
-                    Plugin.Instance.Logger.Info($"快捷菜单提取媒体信息跳过 无路径: {displayName}");
-                    return false;
-                }
-
-                var refreshOptions = Plugin.MediaInfoService.GetMediaInfoRefreshOptions();
-                var directoryService = refreshOptions.DirectoryService;
-
-                if (Uri.TryCreate(filePath, UriKind.Absolute, out var uri) && uri.IsAbsoluteUri &&
-                    uri.Scheme == Uri.UriSchemeFile)
-                {
-                    var file = directoryService.GetFile(filePath);
-                    if (file?.Exists != true)
-                    {
-                        Plugin.Instance.Logger.Info($"快捷菜单提取媒体信息跳过 文件不存在: {displayName}");
-                        return false;
-                    }
-                }
-
-                var deserializeResult = Plugin.MediaSourceInfoStore.ApplyToItem(item);
-                if (item is Video)
-                {
-                    Plugin.ChaptersStore.ApplyToItem(item);
-                }
-                else if (item is Audio)
-                {
-                    Plugin.EmbeddedInfoStore.ApplyToItem(item);
-                }
-
-                if (deserializeResult == MediaInfoDocument.MediaInfoRestoreResult.Restored ||
-                    deserializeResult == MediaInfoDocument.MediaInfoRestoreResult.AlreadyExists)
-                {
-                    Plugin.Instance.Logger.Info($"快捷菜单提取媒体信息继续执行刷新: {displayName}");
-                }
-
-                var collectionFolders = Plugin.LibraryManager.GetCollectionFolders(item).Cast<BaseItem>().ToArray();
-                var libraryOptions = Plugin.LibraryManager.GetLibraryOptions(item);
-                var copiedOptions = LibraryService.CopyLibraryOptions(libraryOptions);
-                
-                item.DateLastRefreshed = new DateTimeOffset();
-                await RefreshTaskRunner.RunAsync(
-                        () => Plugin.ProviderManager
-                            .RefreshSingleItem(item, refreshOptions, collectionFolders, copiedOptions, CancellationToken.None))
-                    .ConfigureAwait(false);
-
-                if (!Plugin.MediaInfoService.HasMediaInfo(item))
-                {
-                    Plugin.Instance.Logger.Info($"快捷菜单提取媒体信息失败 无媒体流: {displayName}");
-                    return false;
-                }
-                return true;
-            }
+            return await Plugin.MediaInfoService
+                .ExtractMediaInfoAsync(item, "快捷菜单")
+                .ConfigureAwait(false);
         }
     }
 }
