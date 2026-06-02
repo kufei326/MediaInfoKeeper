@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -25,7 +26,10 @@ namespace MediaInfoKeeper.Services
         private readonly ConcurrentDictionary<long, byte> extractingItemIds = new ConcurrentDictionary<long, byte>();
         private readonly ConcurrentDictionary<long, byte> prefetchingDanmuItemIds = new ConcurrentDictionary<long, byte>();
         private readonly ConcurrentDictionary<string, CancellationTokenSource> prefetchSessions = new ConcurrentDictionary<string, CancellationTokenSource>(StringComparer.OrdinalIgnoreCase);
+        private readonly object lifecycleLock = new object();
+        private CancellationTokenSource disposeCancellationTokenSource = new CancellationTokenSource();
         private bool initialized;
+        private bool disposed;
 
         public PrefetchService(
             ILibraryManager libraryManager,
@@ -39,24 +43,57 @@ namespace MediaInfoKeeper.Services
 
         public void Initialize()
         {
-            if (initialized)
+            lock (lifecycleLock)
             {
-                return;
-            }
+                if (disposed || initialized)
+                {
+                    return;
+                }
 
-            sessionManager.PlaybackStart += OnPlaybackStart;
-            initialized = true;
+                sessionManager.PlaybackStart += OnPlaybackStart;
+                initialized = true;
+            }
         }
 
         public void Dispose()
         {
-            if (!initialized)
+            CancellationTokenSource lifecycleCancellationTokenSource;
+            lock (lifecycleLock)
             {
-                return;
+                if (disposed)
+                {
+                    return;
+                }
+
+                disposed = true;
+                if (initialized)
+                {
+                    sessionManager.PlaybackStart -= OnPlaybackStart;
+                    initialized = false;
+                }
+
+                lifecycleCancellationTokenSource = disposeCancellationTokenSource;
             }
 
-            sessionManager.PlaybackStart -= OnPlaybackStart;
-            initialized = false;
+            try
+            {
+                lifecycleCancellationTokenSource.Cancel();
+            }
+            catch (ObjectDisposedException)
+            {
+            }
+
+            foreach (var session in prefetchSessions.ToArray())
+            {
+                if (prefetchSessions.TryRemove(session.Key, out var sessionCancellationTokenSource))
+                {
+                    TryCancel(sessionCancellationTokenSource);
+                }
+            }
+
+            extractingItemIds.Clear();
+            prefetchingDanmuItemIds.Clear();
+            lifecycleCancellationTokenSource.Dispose();
         }
 
         private void OnPlaybackStart(object sender, PlaybackProgressEventArgs e)
@@ -103,7 +140,18 @@ namespace MediaInfoKeeper.Services
                 return;
             }
 
-            var cancellationTokenSource = new CancellationTokenSource();
+            CancellationToken lifecycleCancellationToken;
+            lock (lifecycleLock)
+            {
+                if (disposed)
+                {
+                    return;
+                }
+
+                lifecycleCancellationToken = disposeCancellationTokenSource.Token;
+            }
+
+            var cancellationTokenSource = CancellationTokenSource.CreateLinkedTokenSource(lifecycleCancellationToken);
             if (!prefetchSessions.TryAdd(sessionKey, cancellationTokenSource))
             {
                 cancellationTokenSource.Dispose();
@@ -112,15 +160,13 @@ namespace MediaInfoKeeper.Services
 
             logger.Info($"下一集预加载: 5s后执行 {nextEpisodeName}");
 
+            var cancellationToken = cancellationTokenSource.Token;
             _ = Task.Run(async () =>
             {
                 try
                 {
-                    await Task.Delay(NextEpisodePrefetchDelay, cancellationTokenSource.Token).ConfigureAwait(false);
-                    if (cancellationTokenSource.IsCancellationRequested)
-                    {
-                        return;
-                    }
+                    await Task.Delay(NextEpisodePrefetchDelay, cancellationToken).ConfigureAwait(false);
+                    cancellationToken.ThrowIfCancellationRequested();
 
                     var nextEpisode = libraryManager.GetItemById(nextEpisodeId) as Episode;
                     if (nextEpisode == null)
@@ -128,14 +174,20 @@ namespace MediaInfoKeeper.Services
                         return;
                     }
 
+                    var prefetchTasks = new List<Task>(2);
                     if (Plugin.Instance?.Options?.GetMediaInfoOptions()?.EnableMediaInfoPrefetch == true)
                     {
-                        QueueMediaInfoPrefetchIfNeeded(nextEpisode);
+                        prefetchTasks.Add(QueueMediaInfoPrefetchIfNeededAsync(nextEpisode, cancellationToken));
                     }
 
                     if (Plugin.Instance?.Options?.MetaData?.EnableDanmuPrefetch == true)
                     {
-                        QueueDanmuPrefetchIfNeeded(nextEpisode);
+                        prefetchTasks.Add(QueueDanmuPrefetchIfNeededAsync(nextEpisode, cancellationToken));
+                    }
+
+                    if (prefetchTasks.Count > 0)
+                    {
+                        await Task.WhenAll(prefetchTasks).ConfigureAwait(false);
                     }
                 }
                 catch (OperationCanceledException)
@@ -145,18 +197,20 @@ namespace MediaInfoKeeper.Services
                 {
                     if (prefetchSessions.TryRemove(sessionKey, out var existing) && ReferenceEquals(existing, cancellationTokenSource))
                     {
-                        existing.Dispose();
+                        TryCancelAndDispose(existing);
                     }
                     else
                     {
-                        cancellationTokenSource.Dispose();
+                        TryCancelAndDispose(cancellationTokenSource);
                     }
                 }
             });
         }
 
-        private async Task EnsurePlaybackMediaInfoAsync(long itemId, string source)
+        private async Task EnsurePlaybackMediaInfoAsync(long itemId, string source, CancellationToken cancellationToken)
         {
+            cancellationToken.ThrowIfCancellationRequested();
+
             var workItem = libraryManager.GetItemById(itemId);
             if (workItem is not Video && workItem is not Audio)
             {
@@ -197,6 +251,8 @@ namespace MediaInfoKeeper.Services
             var collectionFolders = libraryManager.GetCollectionFolders(workItem).Cast<BaseItem>().ToArray();
             var libraryOptions = libraryManager.GetLibraryOptions(workItem);
 
+            cancellationToken.ThrowIfCancellationRequested();
+
             using (FfProcessGuard.Allow())
             {
                 workItem.DateLastRefreshed = new DateTimeOffset();
@@ -206,10 +262,12 @@ namespace MediaInfoKeeper.Services
                             refreshOptions,
                             collectionFolders,
                             libraryOptions,
-                            CancellationToken.None),
-                        CancellationToken.None)
+                            cancellationToken),
+                        cancellationToken)
                     .ConfigureAwait(false);
             }
+
+            cancellationToken.ThrowIfCancellationRequested();
 
             if (!Plugin.MediaInfoService.HasMediaInfo(workItem))
             {
@@ -220,34 +278,42 @@ namespace MediaInfoKeeper.Services
             logger.Info($"{logPrefix}: 完成 {workItem.FileName ?? workItem.Name ?? displayName}");
         }
 
-        private void QueueMediaInfoPrefetchIfNeeded(BaseItem item)
+        private Task QueueMediaInfoPrefetchIfNeededAsync(BaseItem item, CancellationToken cancellationToken)
         {
             const string source = "媒体信息预加载";
 
+            if (cancellationToken.IsCancellationRequested)
+            {
+                return Task.CompletedTask;
+            }
+
             if (item is not Video && item is not Audio)
             {
-                return;
+                return Task.CompletedTask;
             }
 
             if (Plugin.MediaInfoService.HasMediaInfo(item))
             {
                 logger.Info($"{source}: 跳过，已存在媒体信息 {item.FileName ?? item.Name}");
-                return;
+                return Task.CompletedTask;
             }
 
             if (!extractingItemIds.TryAdd(item.InternalId, 0))
             {
                 logger.Info($"{source}: 跳过，提取中 {item.FileName ?? item.Name}");
-                return;
+                return Task.CompletedTask;
             }
 
             logger.Info($"{source}: 开始 {item.FileName ?? item.Name}");
 
-            _ = Task.Run(async () =>
+            return Task.Run(async () =>
             {
                 try
                 {
-                    await EnsurePlaybackMediaInfoAsync(item.InternalId, source).ConfigureAwait(false);
+                    await EnsurePlaybackMediaInfoAsync(item.InternalId, source, cancellationToken).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException)
+                {
                 }
                 catch (Exception ex)
                 {
@@ -262,30 +328,35 @@ namespace MediaInfoKeeper.Services
             });
         }
 
-        private void QueueDanmuPrefetchIfNeeded(BaseItem item)
+        private Task QueueDanmuPrefetchIfNeededAsync(BaseItem item, CancellationToken cancellationToken)
         {
             const string source = "弹幕预加载";
 
+            if (cancellationToken.IsCancellationRequested)
+            {
+                return Task.CompletedTask;
+            }
+
             if (item is not Episode && item is not MediaBrowser.Controller.Entities.Movies.Movie)
             {
-                return;
+                return Task.CompletedTask;
             }
 
             if (Plugin.DanmuService?.IsEnabled != true || Plugin.DanmuService.IsSupportedItem(item) != true)
             {
-                return;
+                return Task.CompletedTask;
             }
 
             if (Plugin.DanmuService.ShouldSkipAutoDownload(item))
             {
                 logger.Info($"{source}: 跳过，已存在弹幕文件 {item.FileName ?? item.Name}");
-                return;
+                return Task.CompletedTask;
             }
 
             if (!prefetchingDanmuItemIds.TryAdd(item.InternalId, 0))
             {
                 logger.Info($"{source}: 跳过，拉取中 {item.FileName ?? item.Name}");
-                return;
+                return Task.CompletedTask;
             }
 
             var networkFirst = string.Equals(
@@ -295,12 +366,12 @@ namespace MediaInfoKeeper.Services
 
             logger.Info($"{source}: 开始 {item.FileName ?? item.Name}");
 
-            _ = Task.Run(async () =>
+            return Task.Run(async () =>
             {
                 try
                 {
                     var result = await Plugin.DanmuService
-                        .QueueDownloadWithReasonAsync(item.InternalId, networkFirst, CancellationToken.None)
+                        .QueueDownloadWithReasonAsync(item.InternalId, networkFirst, cancellationToken)
                         .ConfigureAwait(false);
                     if (result?.Succeeded == true)
                     {
@@ -311,6 +382,9 @@ namespace MediaInfoKeeper.Services
                         var reason = string.IsNullOrWhiteSpace(result?.Reason) ? "未获取到内容" : result.Reason;
                         logger.Info($"{source}: 跳过，{reason} {item.FileName ?? item.Name}");
                     }
+                }
+                catch (OperationCanceledException)
+                {
                 }
                 catch (Exception ex)
                 {
@@ -323,6 +397,23 @@ namespace MediaInfoKeeper.Services
                     prefetchingDanmuItemIds.TryRemove(item.InternalId, out _);
                 }
             });
+        }
+
+        private static void TryCancel(CancellationTokenSource cancellationTokenSource)
+        {
+            try
+            {
+                cancellationTokenSource.Cancel();
+            }
+            catch (ObjectDisposedException)
+            {
+            }
+        }
+
+        private static void TryCancelAndDispose(CancellationTokenSource cancellationTokenSource)
+        {
+            TryCancel(cancellationTokenSource);
+            cancellationTokenSource.Dispose();
         }
 
     }

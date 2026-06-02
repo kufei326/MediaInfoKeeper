@@ -95,7 +95,7 @@ namespace MediaInfoKeeper.ScheduledTask
 
             if (metadataRefreshTargets.Count > 0)
             {
-                this.logger.Info($"计划任务刷新豆瓣角色中文化 {metadataRefreshTargets.Count} 个 Movie/Series itemid");
+                this.logger.Info($"计划任务刷新豆瓣角色中文化 {metadataRefreshTargets.Count} 个 Movie/Series");
             }
             foreach (var target in metadataRefreshTargets)
             {

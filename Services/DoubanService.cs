@@ -1,5 +1,4 @@
 using System;
-using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json;
@@ -11,6 +10,7 @@ using MediaBrowser.Controller.Providers;
 using MediaBrowser.Model.Entities;
 using MediaInfoKeeper.Common;
 using MediaInfoKeeper.External;
+using Microsoft.Extensions.Caching.Memory;
 
 namespace MediaInfoKeeper.Services
 {
@@ -61,13 +61,6 @@ namespace MediaInfoKeeper.Services
             public string character { get; set; }
         }
 
-        private sealed class CacheEntry<T>
-        {
-            public DateTimeOffset At { get; set; }
-
-            public T Value { get; set; }
-        }
-
         private sealed class MediaLookupContext
         {
             public string DoubanSubjectId { get; set; }
@@ -79,18 +72,23 @@ namespace MediaInfoKeeper.Services
 
         private static readonly Regex MixedChineseEnglishRoleRegex = new Regex(@"^(.+?[\u4E00-\u9FFF][^A-Za-z]*?)\s+[A-Za-z0-9].*$", RegexOptions.Compiled);
         private static readonly Regex DoubanSubjectIdRegex = new Regex(@"(?<!\d)(\d{5,})(?!\d)", RegexOptions.Compiled);
-        private static readonly TimeSpan DoubanCelebrityCacheDuration = TimeSpan.FromMinutes(15);
-        private static readonly TimeSpan DoubanFailureCacheDuration = TimeSpan.FromMinutes(3);
+        private static readonly TimeSpan DoubanSuccessCacheDuration = TimeSpan.FromHours(6);
+        private const int DoubanCelebrityCacheSizeLimit = 128;
+        private const int DoubanImdbSubjectCacheSizeLimit = 128;
         private static readonly JsonSerializerOptions JsonOptions = new JsonSerializerOptions
         {
             PropertyNameCaseInsensitive = true
         };
 
-        private static readonly ConcurrentDictionary<string, CacheEntry<List<DoubanCelebrity>>> DoubanCelebrityCache =
-            new ConcurrentDictionary<string, CacheEntry<List<DoubanCelebrity>>>(StringComparer.OrdinalIgnoreCase);
+        private static readonly MemoryCache DoubanCelebrityCache = new MemoryCache(new MemoryCacheOptions
+        {
+            SizeLimit = DoubanCelebrityCacheSizeLimit
+        });
 
-        private static readonly ConcurrentDictionary<string, CacheEntry<string>> DoubanImdbSubjectCache =
-            new ConcurrentDictionary<string, CacheEntry<string>>(StringComparer.OrdinalIgnoreCase);
+        private static readonly MemoryCache DoubanImdbSubjectCache = new MemoryCache(new MemoryCacheOptions
+        {
+            SizeLimit = DoubanImdbSubjectCacheSizeLimit
+        });
 
         public static bool EnhancePeopleRole(BaseItem item, List<PersonInfo> people)
         {
@@ -178,40 +176,25 @@ namespace MediaInfoKeeper.Services
                 return null;
             }
 
-            if (DoubanCelebrityCache.TryGetValue(context.CacheKey, out var cached) &&
-                ConfiguredDateTime.NowOffset - cached.At < (cached.Value == null ? DoubanFailureCacheDuration : DoubanCelebrityCacheDuration))
+            if (DoubanCelebrityCache.TryGetValue<List<DoubanCelebrity>>(context.CacheKey, out var cached))
             {
-                return cached.Value;
+                return cached;
             }
 
             var body = DoubanApiClient.GetJson(DoubanApiClient.BuildCelebritiesUrl(context.DoubanSubjectType, context.DoubanSubjectId));
             if (string.IsNullOrWhiteSpace(body))
             {
-                DoubanCelebrityCache[context.CacheKey] = new CacheEntry<List<DoubanCelebrity>>
-                {
-                    At = ConfiguredDateTime.NowOffset,
-                    Value = null
-                };
                 return null;
             }
 
             try
             {
                 var actors = JsonSerializer.Deserialize<DoubanCelebrityResponse>(body, JsonOptions)?.actors ?? new List<DoubanCelebrity>();
-                DoubanCelebrityCache[context.CacheKey] = new CacheEntry<List<DoubanCelebrity>>
-                {
-                    At = ConfiguredDateTime.NowOffset,
-                    Value = actors
-                };
+                SetDoubanCelebrityCache(context.CacheKey, actors);
                 return actors;
             }
             catch (Exception)
             {
-                DoubanCelebrityCache[context.CacheKey] = new CacheEntry<List<DoubanCelebrity>>
-                {
-                    At = ConfiguredDateTime.NowOffset,
-                    Value = null
-                };
                 return null;
             }
         }
@@ -365,16 +348,14 @@ namespace MediaInfoKeeper.Services
 
         private static string GetDoubanSubjectFromImdb(string imdbId)
         {
-            if (DoubanImdbSubjectCache.TryGetValue(imdbId, out var cached) &&
-                ConfiguredDateTime.NowOffset - cached.At < (string.IsNullOrWhiteSpace(cached.Value) ? DoubanFailureCacheDuration : DoubanCelebrityCacheDuration))
+            if (DoubanImdbSubjectCache.TryGetValue<string>(imdbId, out var cached))
             {
-                return cached.Value;
+                return cached;
             }
 
             var body = DoubanApiClient.PostImdbLookup(imdbId);
             if (string.IsNullOrWhiteSpace(body))
             {
-                DoubanImdbSubjectCache[imdbId] = new CacheEntry<string> { At = ConfiguredDateTime.NowOffset, Value = null };
                 return null;
             }
 
@@ -382,7 +363,7 @@ namespace MediaInfoKeeper.Services
             {
                 var rawSubjectId = JsonSerializer.Deserialize<DoubanImdbLookupResponse>(body, JsonOptions)?.id;
                 var subjectId = NormalizeDoubanSubjectId(rawSubjectId);
-                DoubanImdbSubjectCache[imdbId] = new CacheEntry<string> { At = ConfiguredDateTime.NowOffset, Value = subjectId };
+                SetDoubanImdbSubjectCache(imdbId, subjectId);
                 Plugin.SharedLogger?.Debug(
                     "DoubanService 豆瓣 IMDb 请求完成: imdb={0}, rawSubject={1}, subject={2}",
                     imdbId,
@@ -392,7 +373,6 @@ namespace MediaInfoKeeper.Services
             }
             catch (Exception)
             {
-                DoubanImdbSubjectCache[imdbId] = new CacheEntry<string> { At = ConfiguredDateTime.NowOffset, Value = null };
                 return null;
             }
         }
@@ -537,6 +517,35 @@ namespace MediaInfoKeeper.Services
 
             var match = DoubanSubjectIdRegex.Match(trimmed);
             return match.Success ? match.Groups[1].Value : trimmed;
+        }
+
+        private static void SetDoubanCelebrityCache(string key, List<DoubanCelebrity> value)
+        {
+            DoubanCelebrityCache.Set(
+                key,
+                value,
+                new MemoryCacheEntryOptions
+                {
+                    AbsoluteExpirationRelativeToNow = DoubanSuccessCacheDuration,
+                    Size = 1
+                });
+        }
+
+        private static void SetDoubanImdbSubjectCache(string key, string value)
+        {
+            if (string.IsNullOrWhiteSpace(value))
+            {
+                return;
+            }
+
+            DoubanImdbSubjectCache.Set(
+                key,
+                value,
+                new MemoryCacheEntryOptions
+                {
+                    AbsoluteExpirationRelativeToNow = DoubanSuccessCacheDuration,
+                    Size = 1
+                });
         }
 
         private static void PersistDoubanSubjectId(BaseItem item, string subjectId)

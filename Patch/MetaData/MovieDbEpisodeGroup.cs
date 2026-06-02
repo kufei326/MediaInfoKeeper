@@ -1,5 +1,4 @@
 using System;
-using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -18,6 +17,7 @@ using MediaBrowser.Model.Logging;
 using MediaBrowser.Model.Providers;
 using MediaInfoKeeper.Common;
 using MediaInfoKeeper.External;
+using Microsoft.Extensions.Caching.Memory;
 
 namespace MediaInfoKeeper.Patch
 {
@@ -75,12 +75,18 @@ namespace MediaInfoKeeper.Patch
 
         private static readonly object InitLock = new object();
         private static readonly TimeSpan CacheDuration = TimeSpan.FromHours(6);
+        private const int EpisodeGroupOnlineCacheSizeLimit = 128;
+        private const int EpisodeGroupLocalCacheSizeLimit = 128;
 
         private static readonly AsyncLocal<Series> CurrentSeries = new AsyncLocal<Series>();
-        private static readonly ConcurrentDictionary<string, (DateTimeOffset At, EpisodeGroupResponse Data)> OnlineCache =
-            new ConcurrentDictionary<string, (DateTimeOffset At, EpisodeGroupResponse Data)>(StringComparer.OrdinalIgnoreCase);
-        private static readonly ConcurrentDictionary<string, (DateTime LastWrite, EpisodeGroupResponse Data)> LocalCache =
-            new ConcurrentDictionary<string, (DateTime LastWrite, EpisodeGroupResponse Data)>(StringComparer.OrdinalIgnoreCase);
+        private static readonly MemoryCache OnlineCache = new MemoryCache(new MemoryCacheOptions
+        {
+            SizeLimit = EpisodeGroupOnlineCacheSizeLimit
+        });
+        private static readonly MemoryCache LocalCache = new MemoryCache(new MemoryCacheOptions
+        {
+            SizeLimit = EpisodeGroupLocalCacheSizeLimit
+        });
 
         private static Harmony harmony;
         private static ILogger logger;
@@ -847,7 +853,8 @@ namespace MediaInfoKeeper.Patch
             try
             {
                 var lastWrite = File.GetLastWriteTimeUtc(localEpisodeGroupPath);
-                if (LocalCache.TryGetValue(localEpisodeGroupPath, out var cached) && cached.LastWrite == lastWrite)
+                if (LocalCache.TryGetValue<LocalEpisodeGroupCacheEntry>(localEpisodeGroupPath, out var cached) &&
+                    cached.LastWrite == lastWrite)
                 {
                     return cached.Data;
                 }
@@ -864,7 +871,7 @@ namespace MediaInfoKeeper.Patch
                 });
                 if (data != null)
                 {
-                    LocalCache[localEpisodeGroupPath] = (lastWrite, data);
+                    SetLocalCache(localEpisodeGroupPath, lastWrite, data);
                     logger?.Debug("MovieDbEpisodeGroup 已加载本地剧集组: file={0}, id={1}",
                         localEpisodeGroupPath,
                         data.id ?? string.Empty);
@@ -886,10 +893,9 @@ namespace MediaInfoKeeper.Patch
             string localEpisodeGroupPath)
         {
             var cacheKey = $"{seriesTmdbId}|{episodeGroupId}|{language}";
-            if (OnlineCache.TryGetValue(cacheKey, out var cached) &&
-                ConfiguredDateTime.NowOffset - cached.At < CacheDuration)
+            if (OnlineCache.TryGetValue<EpisodeGroupResponse>(cacheKey, out var cached))
             {
-                return cached.Data;
+                return cached;
             }
 
             var url = BuildEpisodeGroupUrl(episodeGroupId, language);
@@ -939,7 +945,7 @@ namespace MediaInfoKeeper.Patch
                     data.id = episodeGroupId;
                 }
 
-                OnlineCache[cacheKey] = (ConfiguredDateTime.NowOffset, data);
+                SetOnlineCache(cacheKey, data);
                 logger?.Debug("MovieDbEpisodeGroup 已加载在线剧集组: tmdb={0}, id={1}, groups={2}",
                     seriesTmdbId,
                     data.id ?? episodeGroupId,
@@ -975,7 +981,7 @@ namespace MediaInfoKeeper.Patch
                 });
                 File.WriteAllText(localEpisodeGroupPath, raw);
                 var lastWrite = File.GetLastWriteTimeUtc(localEpisodeGroupPath);
-                LocalCache[localEpisodeGroupPath] = (lastWrite, data);
+                SetLocalCache(localEpisodeGroupPath, lastWrite, data);
                 logger?.Debug("MovieDbEpisodeGroup 已写入本地剧集组: file={0}, id={1}",
                     localEpisodeGroupPath,
                     data?.id ?? string.Empty);
@@ -1052,6 +1058,40 @@ namespace MediaInfoKeeper.Patch
 
             return Uri.TryCreate(value, UriKind.Absolute, out var uri) &&
                    (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps);
+        }
+
+        private static void SetOnlineCache(string key, EpisodeGroupResponse data)
+        {
+            OnlineCache.Set(
+                key,
+                data,
+                new MemoryCacheEntryOptions
+                {
+                    AbsoluteExpirationRelativeToNow = CacheDuration,
+                    Size = 1
+                });
+        }
+
+        private static void SetLocalCache(string key, DateTime lastWrite, EpisodeGroupResponse data)
+        {
+            LocalCache.Set(
+                key,
+                new LocalEpisodeGroupCacheEntry
+                {
+                    LastWrite = lastWrite,
+                    Data = data
+                },
+                new MemoryCacheEntryOptions
+                {
+                    Size = 1
+                });
+        }
+
+        private sealed class LocalEpisodeGroupCacheEntry
+        {
+            public DateTime LastWrite { get; set; }
+
+            public EpisodeGroupResponse Data { get; set; }
         }
 
         private static object GetTaskResult(Task task)
