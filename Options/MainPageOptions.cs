@@ -180,6 +180,10 @@ namespace MediaInfoKeeper.Options
             [SelectItemsSource(nameof(UpdateChannelList))]
             public string UpdateChannel { get; set; } = UpdateChannelOption.Stable.ToString();
 
+            [DisplayName("更新后自动重启 Emby")]
+            [Description("插件更新成功后自动触发 Emby 自重启；关闭时仅提示需要重启。")]
+            public bool RestartEmbyAfterUpdate { get; set; } = false;
+
             public void Initialize()
             {
                 if (string.IsNullOrWhiteSpace(UpdateChannel))
@@ -251,7 +255,8 @@ namespace MediaInfoKeeper.Options
                 AddGroup("更新插件", "",
                     nameof(GitHubToken),
                     nameof(DownloadUrlPrefix),
-                    nameof(UpdateChannel));
+                    nameof(UpdateChannel),
+                    nameof(RestartEmbyAfterUpdate));
 
                 root.EditorItems = groupedItems.Count > 0 ? groupedItems.ToArray() : items.ToArray();
                 return container;
@@ -467,7 +472,8 @@ namespace MediaInfoKeeper.Options
                 CreateScheduledTaskEntry("下载弹幕", "main.scheduled.downloadDanmuXml", "main.scheduled.run.downloadDanmuXml"),
                 CreateScheduledTaskEntry("备份媒体信息", "main.scheduled.exportExistingMediaInfo", "main.scheduled.run.exportExistingMediaInfo"),
                 CreateScheduledTaskEntry("恢复媒体信息", "main.scheduled.restoreMediaInfo", "main.scheduled.run.restoreMediaInfo"),
-                CreateScheduledTaskEntry("扫描外挂文件", "main.scheduled.scanExternalFiles", "main.scheduled.run.scanExternalFiles")
+                CreateScheduledTaskEntry("扫描外挂文件", "main.scheduled.scanExternalFiles", "main.scheduled.run.scanExternalFiles"),
+                CreateScheduledTaskEntry("重启Emby", "main.scheduled.restartEmby", "main.scheduled.run.restartEmby")
             });
         }
 

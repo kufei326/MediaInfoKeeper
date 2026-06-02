@@ -276,6 +276,18 @@ namespace MediaInfoKeeper.ScheduledTask
                 });
 
                 applicationHost.NotifyPendingRestart();
+                if (updatePluginOptions?.RestartEmbyAfterUpdate == true)
+                {
+                    if (applicationHost.CanSelfRestart)
+                    {
+                        logger.Info("插件更新完成，配置已启用自动重启，正在触发 Emby 自重启。");
+                        applicationHost.Restart();
+                    }
+                    else
+                    {
+                        logger.Warn("插件更新完成，但当前 Emby 环境不支持自重启，请手动重启服务。");
+                    }
+                }
             }
             catch (Exception ex)
             {

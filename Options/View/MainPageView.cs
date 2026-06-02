@@ -29,6 +29,8 @@ namespace MediaInfoKeeper.Options.View
         private const string RestoreMediaInfoRunCommandId = "main.scheduled.run.restoreMediaInfo";
         private const string ScanExternalFilesDialogCommandId = "main.scheduled.scanExternalFiles";
         private const string ScanExternalFilesRunCommandId = "main.scheduled.run.scanExternalFiles";
+        private const string RestartEmbyDialogCommandId = "main.scheduled.restartEmby";
+        private const string RestartEmbyRunCommandId = "main.scheduled.run.restartEmby";
 
         private readonly IApplicationHost applicationHost;
         private readonly PluginInfo pluginInfo;
@@ -87,6 +89,11 @@ namespace MediaInfoKeeper.Options.View
                 return Task.FromResult<IPluginUIView>(new ScanExternalFilesTaskDialogView(this.pluginInfo.Id, this.Options));
             }
 
+            if (string.Equals(commandId, RestartEmbyDialogCommandId, StringComparison.Ordinal))
+            {
+                return Task.FromResult<IPluginUIView>(this);
+            }
+
             if (string.Equals(commandId, UpdatePluginRunCommandId, StringComparison.Ordinal))
             {
                 return this.RunScheduledTaskAsync<UpdatePluginTask>();
@@ -125,6 +132,11 @@ namespace MediaInfoKeeper.Options.View
             if (string.Equals(commandId, ScanExternalFilesRunCommandId, StringComparison.Ordinal))
             {
                 return this.RunScheduledTaskAsync<ScanExternalFilesTask>();
+            }
+
+            if (string.Equals(commandId, RestartEmbyRunCommandId, StringComparison.Ordinal))
+            {
+                return this.RunScheduledTaskAsync<RestartEmbyTask>();
             }
 
             return base.RunCommand(itemId, commandId, data);
