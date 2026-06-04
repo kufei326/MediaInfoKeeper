@@ -258,21 +258,6 @@ namespace MediaInfoKeeper.Services.IntroSkip
             logger.Info("ShortcutMenu 清理片头片尾标记: " + (item.FileName ?? item.Path));
         }
 
-        private static bool IsMarkerAddedByMik(ChapterInfo chapter)
-        {
-            return chapter.Name?.EndsWith(MarkerSuffix, StringComparison.Ordinal) == true;
-        }
-
-        private static ChapterInfo CreateManagedMarker(MarkerType markerType, long startPositionTicks)
-        {
-            return new ChapterInfo
-            {
-                Name = markerType + MarkerSuffix,
-                MarkerType = markerType,
-                StartPositionTicks = startPositionTicks
-            };
-        }
-
         private static bool HasNonMikIntro(List<ChapterInfo> chapters)
         {
             return chapters.Any(c => (c.MarkerType == MarkerType.IntroStart || c.MarkerType == MarkerType.IntroEnd) &&
@@ -310,6 +295,21 @@ namespace MediaInfoKeeper.Services.IntroSkip
                 .ToList();
 
             return creditsMarkers != null && creditsMarkers.Count > 0 && creditsMarkers.All(IsMarkerAddedByMik);
+        }
+
+        private static bool IsMarkerAddedByMik(ChapterInfo chapter)
+        {
+            return chapter.Name?.EndsWith(MarkerSuffix, StringComparison.Ordinal) == true;
+        }
+
+        private static ChapterInfo CreateManagedMarker(MarkerType markerType, long startPositionTicks)
+        {
+            return new ChapterInfo
+            {
+                Name = markerType + MarkerSuffix,
+                MarkerType = markerType,
+                StartPositionTicks = startPositionTicks
+            };
         }
 
         private static IntroSkipOptions.SubsequentMarkerMode ParseMode(string value)

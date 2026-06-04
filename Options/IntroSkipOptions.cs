@@ -37,6 +37,14 @@ namespace MediaInfoKeeper.Options
         [DisplayName("过滤普通章节")]
         [Description("阻止 Emby/ffprobe 写入Chapter 01/02 等无效章节。")]
         public bool FilterPlainChapters { get; set; } = true;
+
+        [DisplayName("TheIntroDB API 地址")]
+        [Description("TheIntroDB v3 API 地址。是否启用 TheIntroDB Provider 请在媒体库的元数据抓取器中控制。")]
+        public string TheIntroDbBaseUrl { get; set; } = "https://api.theintrodb.org/v3";
+
+        [DisplayName("TheIntroDB API Key")]
+        [Description("可选。填写后可提高 TheIntroDB 每日请求额度。")]
+        public string TheIntroDbApiKey { get; set; } = string.Empty;
         
         [DisplayName("启用片头打标")]
         [Description("根据播放行为自动标记片头。")]
@@ -183,6 +191,10 @@ namespace MediaInfoKeeper.Options
                 nameof(IntroDetectionFingerprintMinutes),
                 nameof(IntroDetectionMaxConcurrentCount));
 
+            AddGroup("TheIntroDb","",
+                nameof(TheIntroDbBaseUrl),
+                nameof(TheIntroDbApiKey));
+            
             AddGroup("播放行为打标",
                 "最短剧情起始前: 优先视为前置剧情保护区；最短剧情起始到最大片头时长: 片头更可信；" +
                 "超过最大片头时长: 不再判为片头；距离结束小于最大片尾时长: 可判为片尾。",

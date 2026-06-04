@@ -151,7 +151,8 @@ namespace MediaInfoKeeper.Patch
             BaseItem item,
             List<ChapterInfo> chapters,
             IEnumerable<MarkerType> managedMarkerTypes = null,
-            bool clearExtractionFailureResult = false)
+            bool clearExtractionFailureResult = false,
+            bool filterPlainChapters = true)
         {
             if (itemRepository == null)
             {
@@ -167,7 +168,7 @@ namespace MediaInfoKeeper.Patch
                 item,
                 chapters,
                 managedMarkerTypes,
-                filterPlainChapters: true,
+                filterPlainChapters,
                 out _);
 
             using (Allow(item.InternalId))
