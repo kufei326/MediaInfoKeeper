@@ -201,7 +201,7 @@ namespace MediaInfoKeeper.Options
             public string UpdateChannel { get; set; } = UpdateChannelOption.Stable.ToString();
 
             [DisplayName("更新后自动重启 Emby")]
-            [Description("插件更新成功后自动触发 Emby 自重启；关闭时仅提示需要重启。")]
+            [Description("插件更新成功后在空闲时间自动重启 Emby；如当前有活动用户，会延后 30 分钟再检查。关闭时仅提示需要重启。")]
             public bool RestartEmbyAfterUpdate { get; set; } = false;
 
             public void Initialize()
