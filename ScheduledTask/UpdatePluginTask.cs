@@ -2,6 +2,7 @@ using MediaBrowser.Common;
 using MediaBrowser.Common.Configuration;
 using MediaBrowser.Common.Net;
 using MediaBrowser.Controller;
+using MediaBrowser.Controller.LiveTv;
 using MediaBrowser.Controller.Session;
 using MediaBrowser.Model.Activity;
 using MediaBrowser.Model.Logging;
@@ -30,6 +31,7 @@ namespace MediaInfoKeeper.ScheduledTask
         private readonly IJsonSerializer jsonSerializer;
         private readonly IActivityManager activityManager;
         private readonly IServerApplicationHost serverApplicationHost;
+        private readonly ILiveTvManager liveTvManager;
         private readonly ISessionManager sessionManager;
         private readonly ITaskManager taskManager;
         private static string PluginAssemblyFilename => Assembly.GetExecutingAssembly().GetName().Name + ".dll";
@@ -49,6 +51,7 @@ namespace MediaInfoKeeper.ScheduledTask
             IHttpClient httpClient,
             IJsonSerializer jsonSerializer,
             IActivityManager activityManager,
+            ILiveTvManager liveTvManager,
             ISessionManager sessionManager,
             ITaskManager taskManager,
             IServerApplicationHost serverApplicationHost)
@@ -60,6 +63,7 @@ namespace MediaInfoKeeper.ScheduledTask
             this.jsonSerializer = jsonSerializer;
             this.activityManager = activityManager;
             this.serverApplicationHost = serverApplicationHost;
+            this.liveTvManager = liveTvManager;
             this.sessionManager = sessionManager;
             this.taskManager = taskManager;
         }
@@ -287,16 +291,16 @@ namespace MediaInfoKeeper.ScheduledTask
                 {
                     if (applicationHost.CanSelfRestart)
                     {
-                        var activeUserCount = GetActiveUserCount();
-                        if (activeUserCount > 0)
+                        var restartStatus = RestartReadinessChecker.GetStatus(this.sessionManager, this.liveTvManager, this.logger);
+                        if (!restartStatus.CanRestart)
                         {
-                            RestartEmbyTask.ScheduleDelayedCheck(this.taskManager, this.logger, activeUserCount);
-                            logger.Info("插件更新完成，配置已启用自动重启，但当前有活动用户，已改为 30 分钟后通过重启计划任务再次检查。");
+                            RestartEmbyTask.ScheduleDelayedCheck(this.taskManager, this.logger, restartStatus);
+                            logger.Info("插件更新完成，配置已启用自动重启，但{0}，已改为 30 分钟后通过重启计划任务再次检查。", restartStatus.Describe());
                             progress.Report(100);
                             return;
                         }
 
-                        logger.Info("插件更新完成，配置已启用自动重启，且当前没有活动用户，正在触发 Emby 自重启。");
+                        logger.Info("插件更新完成，配置已启用自动重启，且当前没有用户正在播放，也没有 Live TV 正在录制，正在触发 Emby 自重启。");
                         applicationHost.Restart();
                     }
                     else
@@ -502,11 +506,6 @@ namespace MediaInfoKeeper.ScheduledTask
                 .FirstOrDefault(attr => string.Equals(attr.Key, "ReleaseTag", StringComparison.Ordinal));
 
             return string.IsNullOrWhiteSpace(releaseTagAttribute?.Value) ? null : releaseTagAttribute.Value.Trim();
-        }
-
-        private int GetActiveUserCount()
-        {
-            return this.sessionManager.Sessions.Count(session => session?.HasUser == true && session.IsActive);
         }
 
         internal class PluginManifestInfo

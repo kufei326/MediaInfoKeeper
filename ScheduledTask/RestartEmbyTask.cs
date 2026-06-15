@@ -4,6 +4,7 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using MediaBrowser.Common;
+using MediaBrowser.Controller.LiveTv;
 using MediaBrowser.Controller.Session;
 using MediaBrowser.Model.Logging;
 using MediaBrowser.Model.Tasks;
@@ -17,6 +18,7 @@ namespace MediaInfoKeeper.ScheduledTask
         private static Timer delayedCheckTimer;
 
         private readonly IApplicationHost applicationHost;
+        private readonly ILiveTvManager liveTvManager;
         private readonly ISessionManager sessionManager;
         private readonly ITaskManager taskManager;
         private readonly ILogger logger;
@@ -24,10 +26,12 @@ namespace MediaInfoKeeper.ScheduledTask
         public RestartEmbyTask(
             IApplicationHost applicationHost,
             ILogManager logManager,
+            ILiveTvManager liveTvManager,
             ISessionManager sessionManager,
             ITaskManager taskManager)
         {
             this.applicationHost = applicationHost;
+            this.liveTvManager = liveTvManager;
             this.sessionManager = sessionManager;
             this.taskManager = taskManager;
             this.logger = logManager.GetLogger(Plugin.PluginName);
@@ -37,7 +41,7 @@ namespace MediaInfoKeeper.ScheduledTask
 
         public string Name => "09.重启Emby";
 
-        public string Description => "在没有活动用户时重启 Emby；如当前有活动用户，会延后 30 分钟再检查。";
+        public string Description => "在没有用户播放且没有 Live TV 录制时重启 Emby；否则会延后 30 分钟再检查。";
 
         public string Category => Plugin.TaskCategoryName;
 
@@ -59,10 +63,10 @@ namespace MediaInfoKeeper.ScheduledTask
 
             await Task.Yield();
 
-            var activeUserCount = GetActiveUserCount();
-            if (activeUserCount > 0)
+            var restartStatus = RestartReadinessChecker.GetStatus(this.sessionManager, this.liveTvManager, this.logger);
+            if (!restartStatus.CanRestart)
             {
-                ScheduleDelayedCheck(this.taskManager, this.logger, activeUserCount);
+                ScheduleDelayedCheck(this.taskManager, this.logger, restartStatus);
                 progress?.Report(100);
                 return;
             }
@@ -75,7 +79,7 @@ namespace MediaInfoKeeper.ScheduledTask
         internal static void ScheduleDelayedCheck(
             ITaskManager taskManager,
             ILogger logger,
-            int activeUserCount)
+            RestartReadinessStatus restartStatus)
         {
             var worker = FindRestartTaskWorker(taskManager);
             if (worker == null)
@@ -101,8 +105,8 @@ namespace MediaInfoKeeper.ScheduledTask
             }
 
             logger.Info(
-                "检测到 {0} 个活动用户，已安排 {1:yyyy-MM-dd HH:mm:ss} 再次检查是否可以重启 Emby。",
-                activeUserCount,
+                "{0}，已安排 {1:yyyy-MM-dd HH:mm:ss} 再次检查是否可以重启 Emby。",
+                restartStatus?.Describe() ?? "检测到重启阻止条件",
                 nextCheckTime);
         }
 
@@ -112,9 +116,5 @@ namespace MediaInfoKeeper.ScheduledTask
                 string.Equals(worker?.ScheduledTask?.Key, "MediaInfoKeeperRestartEmbyTask", StringComparison.Ordinal));
         }
 
-        private int GetActiveUserCount()
-        {
-            return this.sessionManager.Sessions.Count(session => session?.HasUser == true && session.IsActive);
-        }
     }
 }
