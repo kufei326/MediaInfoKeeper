@@ -7,7 +7,6 @@ using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
 using MediaInfoKeeper.Patch;
-using MediaInfoKeeper.Store;
 using MediaBrowser.Common;
 using MediaBrowser.Common.Configuration;
 using MediaBrowser.Controller.Entities;
@@ -107,8 +106,9 @@ namespace MediaInfoKeeper.Services
                         return;
                     }
 
-                    episode = await PrepareEpisodeForDetectionAsync(episode, source + "Pre")
-                        .ConfigureAwait(false);
+                    episode = await Plugin.MediaInfoService
+                        .EnsureVideoReadyForAudioAnalysisAsync(episode, source + " 片头扫描预提取", CancellationToken.None)
+                        .ConfigureAwait(false) as Episode;
                     if (episode == null)
                     {
                         return;
@@ -135,8 +135,9 @@ namespace MediaInfoKeeper.Services
                         await Task.Delay(TimeSpan.FromMinutes(2), CancellationToken.None)
                             .ConfigureAwait(false);
 
-                        episode = await PrepareEpisodeForDetectionAsync(episode, source + "RetryPre")
-                            .ConfigureAwait(false);
+                        episode = await Plugin.MediaInfoService
+                            .EnsureVideoReadyForAudioAnalysisAsync(episode, source + " 片头扫描重试预提取", CancellationToken.None)
+                            .ConfigureAwait(false) as Episode;
                         if (episode == null)
                         {
                             return;
@@ -166,105 +167,6 @@ namespace MediaInfoKeeper.Services
             return true;
         }
 
-        /// <summary>为片头探测准备剧集状态，确保挂载可用、MediaInfo 可恢复且存在音频流。</summary>
-        private async Task<Episode> PrepareEpisodeForDetectionAsync(Episode episode, string source)
-        {
-            if (episode == null)
-            {
-                return null;
-            }
-
-            var workEpisode = this.libraryManager.GetItemById(episode.InternalId) as Episode ?? episode;
-
-            if (LibraryService.IsFileShortcut(workEpisode.Path ?? workEpisode.FileName))
-            {
-                var mountedPath = await Plugin.LibraryService.GetStrmMountPathAsync(workEpisode.Path).ConfigureAwait(false);
-                if (string.IsNullOrEmpty(mountedPath))
-                {
-                    this.logger.Warn($"{source} 片头扫描预提取: {workEpisode.FileName} InternalId: {workEpisode.InternalId} 挂载路径解析失败，跳过扫描");
-                    return null;
-                }
-            }
-
-            if (!Plugin.MediaInfoService.HasMediaInfo(workEpisode))
-            {
-                this.logger.Info($"{source} 片头扫描预提取: {workEpisode.FileName} 无 MediaInfo，尝试从 JSON 恢复");
-                var restoreResult = Plugin.MediaSourceInfoStore.ApplyToItem(workEpisode);
-                Plugin.ChaptersStore.ApplyToItem(workEpisode);
-                var restoreSucceeded =
-                    restoreResult == MediaInfoDocument.MediaInfoRestoreResult.Restored ||
-                    restoreResult == MediaInfoDocument.MediaInfoRestoreResult.AlreadyExists;
-
-                if (!restoreSucceeded)
-                {
-                    this.logger.Info($"{source} 片头扫描预提取: {workEpisode.FileName} 开始提取媒体信息");
-                    workEpisode = await RefreshEpisodeForDetectionAsync(workEpisode, source + " Extract")
-                        .ConfigureAwait(false);
-                    if (workEpisode == null)
-                    {
-                        return null;
-                    }
-                }
-            }
-
-            workEpisode = this.libraryManager.GetItemById(workEpisode.InternalId) as Episode ?? workEpisode;
-            if (!Plugin.MediaInfoService.HasMediaInfo(workEpisode))
-            {
-                this.logger.Warn($"{source} 片头扫描预提取: {workEpisode.FileName} 提取后仍无 MediaInfo，跳过扫描");
-                return null;
-            }
-
-            if (!Plugin.MediaInfoService.HasAudioStream(workEpisode))
-            {
-                this.logger.Warn($"{source} 片头扫描预提取: {workEpisode.FileName} MediaInfo 存在但无音频流，跳过扫描");
-                return null;
-            }
-
-            return workEpisode;
-        }
-
-        /// <summary>为片头探测执行一次最小化刷新，以便补齐 MediaInfo。</summary>
-        private async Task<Episode> RefreshEpisodeForDetectionAsync(Episode episode, string source)
-        {
-            if (episode == null)
-            {
-                return null;
-            }
-
-            try
-            {
-                var metadataRefreshOptions = new MetadataRefreshOptions(new DirectoryService(this.logger, this.fileSystem))
-                {
-                    EnableRemoteContentProbe = true,
-                    MetadataRefreshMode = MetadataRefreshMode.ValidationOnly,
-                    ReplaceAllMetadata = false,
-                    ImageRefreshMode = MetadataRefreshMode.ValidationOnly,
-                    ReplaceAllImages = false,
-                    EnableThumbnailImageExtraction = false,
-                    EnableSubtitleDownloading = false
-                };
-                var collectionFolders = this.libraryManager.GetCollectionFolders(episode).Cast<BaseItem>().ToArray();
-                var libraryOptions = this.libraryManager.GetLibraryOptions(episode);
-                using (FfProcessGuard.Allow())
-                {
-                    episode.DateLastRefreshed = new DateTimeOffset();
-                    await RefreshTaskRunner.RunAsync(
-                            () => Plugin.ProviderManager
-                                .RefreshSingleItem(episode, metadataRefreshOptions, collectionFolders, libraryOptions, CancellationToken.None))
-                        .ConfigureAwait(false);
-                }
-
-                return episode;
-            }
-            catch (Exception ex)
-            {
-                this.logger.Error($"{source} 片头扫描: 未刷新条目触发刷新失败 {episode.Path} InternalId: {episode.InternalId}");
-                this.logger.Error(ex.Message);
-                this.logger.Debug(ex.StackTrace);
-                return null;
-            }
-        }
-
         /// <summary>在并发门控下执行单个剧集的扫描，并汇总批量扫描进度。</summary>
         private async Task ScanEpisodeWithConcurrencyGateAsync(
             Episode episode,
@@ -280,6 +182,15 @@ namespace MediaInfoKeeper.Services
                 if (cancellationToken.IsCancellationRequested)
                 {
                     this.logger.Info("扫描已取消");
+                    return;
+                }
+
+                episode = await Plugin.MediaInfoService
+                    .EnsureVideoReadyForAudioAnalysisAsync(episode, "计划任务片头扫描预提取", cancellationToken)
+                    .ConfigureAwait(false) as Episode;
+                if (episode == null)
+                {
+                    ReportScanProgress(null, total, progress, progressCounter);
                     return;
                 }
 
@@ -360,11 +271,30 @@ namespace MediaInfoKeeper.Services
             {
                 if (onCompleted != null && total.HasValue)
                 {
-                    var completed = onCompleted();
-                    this.logger.Info($"扫描进度 {completed}/{total}: {displayName} (id={episode.InternalId}, parent={episode.ParentId})");
-                    progress?.Report(completed / (double)total.Value * 100);
+                    ReportScanProgress(episode, total.Value, progress, onCompleted);
                 }
             }
+        }
+
+        private void ReportScanProgress(
+            Episode episode,
+            int total,
+            IProgress<double> progress,
+            ProgressCounter progressCounter)
+        {
+            ReportScanProgress(episode, total, progress, () => Interlocked.Increment(ref progressCounter.Completed));
+        }
+
+        private void ReportScanProgress(
+            Episode episode,
+            int total,
+            IProgress<double> progress,
+            Func<int> onCompleted)
+        {
+            var completed = onCompleted();
+            var displayName = episode?.FileName ?? episode?.Path ?? "<skipped>";
+            this.logger.Info($"扫描进度 {completed}/{total}: {displayName} (id={episode?.InternalId ?? 0}, parent={episode?.ParentId ?? 0})");
+            progress?.Report(completed / (double)total * 100);
         }
 
         /// <summary>按当前配置获取片头探测并发门控实例。</summary>
@@ -381,12 +311,6 @@ namespace MediaInfoKeeper.Services
 
                 return introScanSemaphore;
             }
-        }
-
-        /// <summary>承载批量扫描时的已完成计数，便于线程安全地汇报进度。</summary>
-        private sealed class ProgressCounter
-        {
-            public int Completed;
         }
 
         /// <summary>调用 Emby 的 AudioFingerprint 流程，对单个剧集执行片头探测。</summary>
@@ -754,6 +678,12 @@ namespace MediaInfoKeeper.Services
             }
 
             return result;
+        }
+
+        /// <summary>承载批量扫描时的已完成计数，便于线程安全地汇报进度。</summary>
+        private sealed class ProgressCounter
+        {
+            public int Completed;
         }
 
         private sealed class AudioFingerprintRuntime
