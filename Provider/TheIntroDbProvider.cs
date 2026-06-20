@@ -154,7 +154,7 @@ namespace MediaInfoKeeper.Provider
                 chapters,
                 new[] { MarkerType.IntroStart, MarkerType.IntroEnd, MarkerType.CreditsStart },
                 filterPlainChapters: false);
-            Plugin.Instance.Logger.Info("TheIntroDB Provider 已写入章节标记: {0}", TheIntroDbService.FormatItemForLog(item));
+            Plugin.Instance.Logger.Info("TheIntroDB 标记写入成功: {0}", TheIntroDbService.FormatItemForLog(item));
             return ItemUpdateType.MetadataImport;
         }
     }

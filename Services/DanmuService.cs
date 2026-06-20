@@ -10,6 +10,7 @@ using MediaBrowser.Controller.Entities;
 using MediaBrowser.Controller.Entities.Movies;
 using MediaBrowser.Controller.Entities.TV;
 using MediaBrowser.Model.Logging;
+using MediaInfoKeeper.Common;
 
 namespace MediaInfoKeeper.Services
 {
@@ -34,8 +35,8 @@ namespace MediaInfoKeeper.Services
         }
 
         private static readonly TimeSpan QueueIntervalDelay = TimeSpan.FromSeconds(3);
-        private static readonly TimeSpan TooManyRequestsDelay = TimeSpan.FromMinutes(1);
-        private const string TooManyRequestsMessage = "TooManyRequests";
+        private static readonly TimeSpan FetchCacheDuration = TimeSpan.FromHours(6);
+        private const string FetchCacheScope = "danmu-fetch";
 
         private readonly ILogger logger;
         private readonly IHttpClient httpClient;
@@ -69,7 +70,7 @@ namespace MediaInfoKeeper.Services
             var item = Plugin.LibraryManager?.GetItemById(internalId);
             if (!overwriteExisting && ShouldSkipAutoDownload(item))
             {
-                this.logger.Info($"弹幕下载: 跳过 {item?.FileName} 文件已存在");
+                this.logger.Debug($"弹幕下载: 跳过 {item?.FileName} 文件已存在");
                 completionSource.TrySetResult(false);
                 return completionSource.Task;
             }
@@ -151,22 +152,22 @@ namespace MediaInfoKeeper.Services
                         queuedItem.CompletionSource?.TrySetResult(result.Succeeded);
                         queuedItem.DetailCompletionSource?.TrySetResult(result);
                     }
-                    catch (Exception ex) when (string.Equals(ex.Message, TooManyRequestsMessage, StringComparison.Ordinal))
+                    catch (Exception ex)
                     {
                         queuedItem.CompletionSource?.TrySetResult(false);
                         queuedItem.DetailCompletionSource?.TrySetResult(new DanmuDownloadResult
                         {
                             Succeeded = false,
-                            Reason = "请求过多，队列休息 60 秒"
+                            Reason = ex.Message
                         });
-                        this.logger.Info($"弹幕下载: 失败 {queuedItem.InternalId} {ex.Message}，队列休息 60 秒");
-                        await Task.Delay(TooManyRequestsDelay).ConfigureAwait(false);
+                        this.logger.Debug($"弹幕下载: 失败 {queuedItem.InternalId} {ex.Message}");
+                        this.logger.Debug(ex.StackTrace);
                     }
                     await Task.Delay(QueueIntervalDelay).ConfigureAwait(false);
                 }
                 catch (Exception ex)
                 {
-                    this.logger.Info($"弹幕下载: 失败 queue {ex.Message}");
+                    this.logger.Debug($"弹幕下载: 失败 queue {ex.Message}");
                     this.logger.Debug(ex.StackTrace);
                 }
             }
@@ -278,7 +279,11 @@ namespace MediaInfoKeeper.Services
             }
 
             await File.WriteAllBytesAsync(targetPath, fetchResult.XmlBytes, cancellationToken).ConfigureAwait(false);
-            this.logger.Info($"弹幕下载: 成功 {item.FileName}");
+            if (!fetchResult.FromCache)
+            {
+                this.logger.Info($"Danmu 下载成功: {FormatItemForLog(item)}");
+            }
+
             return Succeeded();
         }
 
@@ -293,6 +298,8 @@ namespace MediaInfoKeeper.Services
             public byte[] XmlBytes { get; set; }
 
             public string Reason { get; set; }
+
+            public bool FromCache { get; set; }
         }
 
         private async Task<DanmuFetchResult> FetchDanmuXmlDetailedAsync(BaseItem item, CancellationToken cancellationToken)
@@ -313,6 +320,17 @@ namespace MediaInfoKeeper.Services
             }
 
             var baseUrl = Plugin.Instance?.Options?.MetaData?.DanmuApiBaseUrl?.Trim();
+            var cacheKey = BuildSearchCacheKey(animeTitle, episodeNumber);
+            var cachedXmlBytes = PluginDiskCache.GetBytes(FetchCacheScope, cacheKey, FetchCacheDuration, ".xml");
+            if (cachedXmlBytes != null && cachedXmlBytes.Length > 0)
+            {
+                return new DanmuFetchResult
+                {
+                    XmlBytes = cachedXmlBytes,
+                    FromCache = true
+                };
+            }
+
             var episodeId = await SearchEpisodeIdAsync(baseUrl, animeTitle, episodeNumber, cancellationToken).ConfigureAwait(false);
             if (string.IsNullOrWhiteSpace(episodeId))
             {
@@ -325,7 +343,9 @@ namespace MediaInfoKeeper.Services
                 return new DanmuFetchResult { Reason = $"未获取到内容 episodeId={episodeId}" };
             }
 
-            return new DanmuFetchResult { XmlBytes = xmlBytes };
+            var success = new DanmuFetchResult { XmlBytes = xmlBytes };
+            SetFetchCache(cacheKey, success);
+            return success;
         }
 
         private static DanmuDownloadResult Succeeded()
@@ -351,6 +371,31 @@ namespace MediaInfoKeeper.Services
             return Plugin.Instance?.Options?.MetaData?.AlwaysFetchLatestDanmu == true;
         }
 
+        private static string FormatItemForLog(BaseItem item)
+        {
+            if (item == null)
+            {
+                return "<unknown>";
+            }
+
+            return item.FileName ?? item.Path ?? item.Name ?? item.InternalId.ToString();
+        }
+
+        private static string BuildSearchCacheKey(string animeTitle, int episodeNumber)
+        {
+            return $"{NormalizeCacheKeyPart(animeTitle)}|{episodeNumber}";
+        }
+
+        private static string NormalizeCacheKeyPart(string value)
+        {
+            return (value ?? string.Empty).Trim().ToUpperInvariant();
+        }
+
+        private static void SetFetchCache(string cacheKey, DanmuFetchResult result)
+        {
+            PluginDiskCache.SetBytes(FetchCacheScope, cacheKey, result?.XmlBytes, ".xml");
+        }
+
         private async Task<string> SearchEpisodeIdAsync(string baseUrl, string animeTitle, int episodeNumber, CancellationToken cancellationToken)
         {
             var requestUrl = BuildApiUrl(
@@ -371,12 +416,7 @@ namespace MediaInfoKeeper.Services
 
             if ((int)response.StatusCode < 200 || (int)response.StatusCode >= 300)
             {
-                if ((int)response.StatusCode == 429)
-                {
-                    throw new InvalidOperationException(TooManyRequestsMessage);
-                }
-
-                this.logger.Info($"弹幕下载: 失败 {animeTitle} status={(int)response.StatusCode} url={requestUrl} body={body}");
+                this.logger.Debug($"弹幕下载: 失败 {animeTitle} status={(int)response.StatusCode} url={requestUrl} body={body}");
                 return null;
             }
 
@@ -421,7 +461,7 @@ namespace MediaInfoKeeper.Services
             }
             catch (Exception ex)
             {
-                this.logger.Info($"弹幕下载: 失败 {animeTitle} 结果解析异常 url={requestUrl}");
+                this.logger.Debug($"弹幕下载: 失败 {animeTitle} 结果解析异常 url={requestUrl}");
                 this.logger.Debug(ex.Message);
             }
 
@@ -443,13 +483,8 @@ namespace MediaInfoKeeper.Services
             using var response = await httpClient.GetResponse(requestOptions).ConfigureAwait(false);
             if ((int)response.StatusCode < 200 || (int)response.StatusCode >= 300)
             {
-                if ((int)response.StatusCode == 429)
-                {
-                    throw new InvalidOperationException(TooManyRequestsMessage);
-                }
-
                 var body = await ReadStreamToStringAsync(response.Content).ConfigureAwait(false);
-                this.logger.Info($"弹幕下载: 失败 {episodeId} status={(int)response.StatusCode} url={requestUrl} body={body}");
+                this.logger.Debug($"弹幕下载: 失败 {episodeId} status={(int)response.StatusCode} url={requestUrl} body={body}");
                 return null;
             }
 

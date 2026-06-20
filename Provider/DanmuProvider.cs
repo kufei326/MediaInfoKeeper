@@ -91,21 +91,17 @@ namespace MediaInfoKeeper.Provider
 
                 if (result.Succeeded)
                 {
-                    Plugin.Instance.Logger.Info("Danmu Provider 已下载弹幕: {0}", FormatItemForLog(item));
                     return ItemUpdateType.MetadataImport;
                 }
 
-                Plugin.Instance.Logger.Debug("Danmu Provider 跳过: {0} {1}", FormatItemForLog(item), result.Reason);
                 return ItemUpdateType.None;
             }
             catch (OperationCanceledException)
             {
                 throw;
             }
-            catch (Exception ex)
+            catch (Exception)
             {
-                Plugin.Instance.Logger.Info("Danmu Provider 失败: {0} {1}", FormatItemForLog(item), ex.Message);
-                Plugin.Instance.Logger.Debug(ex.StackTrace);
                 return ItemUpdateType.None;
             }
         }
@@ -120,16 +116,5 @@ namespace MediaInfoKeeper.Provider
                    item.IsMetadataFetcherEnabled(libraryOptions, ProviderName);
         }
 
-        private static string FormatItemForLog(BaseItem item)
-        {
-            if (item == null)
-            {
-                return "empty item";
-            }
-
-            return string.IsNullOrWhiteSpace(item.Path)
-                ? item.Name
-                : item.Path;
-        }
     }
 }

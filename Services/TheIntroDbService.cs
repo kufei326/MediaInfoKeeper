@@ -10,7 +10,7 @@ using MediaBrowser.Controller.Entities;
 using MediaBrowser.Controller.Entities.Movies;
 using MediaBrowser.Controller.Entities.TV;
 using MediaBrowser.Model.Entities;
-using Microsoft.Extensions.Caching.Memory;
+using MediaInfoKeeper.Common;
 
 namespace MediaInfoKeeper.Services
 {
@@ -95,6 +95,17 @@ namespace MediaInfoKeeper.Services
             public long EndTicks { get; set; }
         }
 
+        private sealed class MarkerLookupQuery
+        {
+            public List<string> RequestParts { get; set; }
+
+            public string CacheKey { get; set; }
+
+            public string Reason { get; set; }
+
+            public bool IsValid => RequestParts != null && RequestParts.Count > 0 && string.IsNullOrWhiteSpace(Reason);
+        }
+
         private const string TheIntroDbMarkerSuffix = "#MIKTIDB";
         private static readonly JsonSerializerOptions JsonOptions = new JsonSerializerOptions
         {
@@ -102,12 +113,8 @@ namespace MediaInfoKeeper.Services
             DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
         };
         private static readonly TimeSpan TheIntroDbSuccessCacheDuration = TimeSpan.FromHours(6);
-        private const int TheIntroDbMarkerCacheSizeLimit = 128;
         private const string DefaultBaseUrl = "https://api.theintrodb.org/v3";
-        private static readonly MemoryCache TheIntroDbMarkerCache = new MemoryCache(new MemoryCacheOptions
-        {
-            SizeLimit = TheIntroDbMarkerCacheSizeLimit
-        });
+        private const string MarkerCacheScope = "theintrodb-markers";
 
         public static Task<MarkerLookupResult> GetMarkersAsync(Movie movie, CancellationToken cancellationToken)
         {
@@ -116,18 +123,13 @@ namespace MediaInfoKeeper.Services
                 return Task.FromResult(NotFound("empty movie"));
             }
 
-            var queryParts = BuildIdQueryParts(movie.GetProviderId(MetadataProviders.Tmdb), null, movie.GetProviderId(MetadataProviders.Imdb));
-            if (queryParts.Count == 0)
+            var query = BuildLookupQuery(movie, includeDuration: true);
+            if (!query.IsValid)
             {
-                return Task.FromResult(NotFound("missing movie ids"));
+                return Task.FromResult(NotFound(query.Reason));
             }
 
-            if (movie.RunTimeTicks.HasValue && movie.RunTimeTicks.Value > 0)
-            {
-                queryParts.Add("duration_ms=" + (movie.RunTimeTicks.Value / TimeSpan.TicksPerMillisecond));
-            }
-
-            return GetMarkersAsync(queryParts, movie, FormatItemForLog(movie), cancellationToken);
+            return GetMarkersAsync(query, movie, FormatItemForLog(movie), cancellationToken);
         }
 
         public static Task<MarkerLookupResult> GetMarkersAsync(Episode episode, CancellationToken cancellationToken)
@@ -137,23 +139,13 @@ namespace MediaInfoKeeper.Services
                 return Task.FromResult(NotFound("empty episode"));
             }
 
-            var queryParts = BuildIdQueryParts(
-                episode.Series?.GetProviderId(MetadataProviders.Tmdb.ToString())?.Trim(),
-                episode.Series?.GetProviderId(MetadataProviders.Tvdb.ToString())?.Trim(),
-                episode.Series?.GetProviderId(MetadataProviders.Imdb.ToString())?.Trim());
-            if (queryParts.Count == 0 || !episode.ParentIndexNumber.HasValue || !episode.IndexNumber.HasValue)
+            var query = BuildLookupQuery(episode, includeDuration: true);
+            if (!query.IsValid)
             {
-                return Task.FromResult(NotFound("missing series ids or episode numbers"));
+                return Task.FromResult(NotFound(query.Reason));
             }
 
-            queryParts.Add("season=" + episode.ParentIndexNumber.Value);
-            queryParts.Add("episode=" + episode.IndexNumber.Value);
-            if (episode.RunTimeTicks.HasValue && episode.RunTimeTicks.Value > 0)
-            {
-                queryParts.Add("duration_ms=" + (episode.RunTimeTicks.Value / TimeSpan.TicksPerMillisecond));
-            }
-
-            return GetMarkersAsync(queryParts, episode, FormatItemForLog(episode), cancellationToken);
+            return GetMarkersAsync(query, episode, FormatItemForLog(episode), cancellationToken);
         }
 
         public static async Task<MarkerSubmitResult> SubmitMarkersAsync(BaseItem item, CancellationToken cancellationToken)
@@ -253,6 +245,7 @@ namespace MediaInfoKeeper.Services
 
             if (submittedSegments > 0)
             {
+                InvalidateMarkerCache(item);
                 return new MarkerSubmitResult
                 {
                     Succeeded = true,
@@ -280,7 +273,7 @@ namespace MediaInfoKeeper.Services
         }
 
         private static async Task<MarkerLookupResult> GetMarkersAsync(
-            List<string> queryParts,
+            MarkerLookupQuery query,
             BaseItem item,
             string detail,
             CancellationToken cancellationToken)
@@ -291,17 +284,20 @@ namespace MediaInfoKeeper.Services
                 return NotFound("IHttpClient unavailable");
             }
 
-            var configuredBaseUrl = Plugin.Instance?.Options?.IntroSkip?.TheIntroDbBaseUrl;
-            var apiUrl = (string.IsNullOrWhiteSpace(configuredBaseUrl) ? DefaultBaseUrl : configuredBaseUrl.Trim()).TrimEnd('/') + "/media";
+            var apiUrl = BuildApiUrl("media");
             var apiKey = Plugin.Instance?.Options?.IntroSkip?.TheIntroDbApiKey?.Trim();
-            var cacheKey = apiUrl + "|" + (string.IsNullOrWhiteSpace(apiKey) ? "anonymous" : "authenticated") + "|" + string.Join("&", queryParts);
-            if (TheIntroDbMarkerCache.TryGetValue(cacheKey, out MarkerLookupResult cachedResult))
+            var diskCachedResult = PluginDiskCache.GetJson<MarkerLookupResult>(
+                    MarkerCacheScope,
+                    query.CacheKey,
+                    TheIntroDbSuccessCacheDuration,
+                    JsonOptions);
+            if (diskCachedResult != null)
             {
-                LogHit(detail, cachedResult);
-                return cachedResult;
+                LogHit(detail, diskCachedResult);
+                return diskCachedResult;
             }
 
-            var requestUrl = apiUrl + "?" + string.Join("&", queryParts);
+            var requestUrl = apiUrl + "?" + string.Join("&", query.RequestParts);
             try
             {
                 var requestOptions = new HttpRequestOptions
@@ -312,8 +308,7 @@ namespace MediaInfoKeeper.Services
                     UserAgent = "MediaInfoKeeper",
                     EnableDefaultUserAgent = false,
                     TimeoutMs = 10000,
-                    CacheMode = (CacheMode)1,
-                    CacheLength = TheIntroDbSuccessCacheDuration,
+                    CacheMode = CacheMode.None,
                     ThrowOnErrorResponse = false
                 };
 
@@ -333,7 +328,9 @@ namespace MediaInfoKeeper.Services
                 var statusCode = (int)response.StatusCode;
                 if (statusCode == 404)
                 {
-                    return NotFound("404 Not Found");
+                    var notFoundResult = NotFound("404 Not Found");
+                    PluginDiskCache.SetJson(MarkerCacheScope, query.CacheKey, notFoundResult, JsonOptions);
+                    return notFoundResult;
                 }
 
                 if (statusCode == 429)
@@ -358,7 +355,9 @@ namespace MediaInfoKeeper.Services
                 var credits = SelectFirstValidCredits(media?.Credits, item);
                 if (intro == null && credits == null)
                 {
-                    return NotFound("no usable segment");
+                    var notFoundResult = NotFound("no usable segment");
+                    PluginDiskCache.SetJson(MarkerCacheScope, query.CacheKey, notFoundResult, JsonOptions);
+                    return notFoundResult;
                 }
 
                 var result = new MarkerLookupResult
@@ -368,14 +367,7 @@ namespace MediaInfoKeeper.Services
                     IntroEndTicks = intro?.EndTicks,
                     CreditsStartTicks = credits
                 };
-                TheIntroDbMarkerCache.Set(
-                    cacheKey,
-                    result,
-                    new MemoryCacheEntryOptions
-                    {
-                        AbsoluteExpirationRelativeToNow = TheIntroDbSuccessCacheDuration,
-                        Size = 1
-                    });
+                PluginDiskCache.SetJson(MarkerCacheScope, query.CacheKey, result, JsonOptions);
                 LogHit(detail, result);
                 return result;
             }
@@ -408,8 +400,7 @@ namespace MediaInfoKeeper.Services
                 return SubmitSkipped("missing api key");
             }
 
-            var configuredBaseUrl = Plugin.Instance?.Options?.IntroSkip?.TheIntroDbBaseUrl;
-            var apiUrl = (string.IsNullOrWhiteSpace(configuredBaseUrl) ? DefaultBaseUrl : configuredBaseUrl.Trim()).TrimEnd('/') + "/submit";
+            var apiUrl = BuildApiUrl("submit");
             var detail = FormatItemForLog(item);
             var bodyJson = JsonSerializer.Serialize(submission, JsonOptions);
 
@@ -732,6 +723,74 @@ namespace MediaInfoKeeper.Services
             }
 
             return queryParts;
+        }
+
+        private static MarkerLookupQuery BuildLookupQuery(BaseItem item, bool includeDuration)
+        {
+            var query = new MarkerLookupQuery();
+            if (item is Movie movie)
+            {
+                var requestParts = BuildIdQueryParts(movie.GetProviderId(MetadataProviders.Tmdb), null, movie.GetProviderId(MetadataProviders.Imdb));
+                if (requestParts.Count == 0)
+                {
+                    query.Reason = "missing movie ids";
+                    return query;
+                }
+
+                query.CacheKey = string.Join("&", requestParts);
+                AppendDuration(requestParts, movie, includeDuration);
+                query.RequestParts = requestParts;
+                return query;
+            }
+
+            if (item is Episode episode)
+            {
+                var requestParts = BuildIdQueryParts(
+                    episode.Series?.GetProviderId(MetadataProviders.Tmdb.ToString())?.Trim(),
+                    episode.Series?.GetProviderId(MetadataProviders.Tvdb.ToString())?.Trim(),
+                    episode.Series?.GetProviderId(MetadataProviders.Imdb.ToString())?.Trim());
+                if (requestParts.Count == 0 || !episode.ParentIndexNumber.HasValue || !episode.IndexNumber.HasValue)
+                {
+                    query.Reason = "missing series ids or episode numbers";
+                    return query;
+                }
+
+                requestParts.Add("season=" + episode.ParentIndexNumber.Value);
+                requestParts.Add("episode=" + episode.IndexNumber.Value);
+                query.CacheKey = string.Join("&", requestParts);
+                AppendDuration(requestParts, episode, includeDuration);
+                query.RequestParts = requestParts;
+                return query;
+            }
+
+            query.Reason = "unsupported item type";
+            return query;
+        }
+
+        private static void AppendDuration(List<string> queryParts, BaseItem item, bool includeDuration)
+        {
+            if (includeDuration && item?.RunTimeTicks.HasValue == true && item.RunTimeTicks.Value > 0)
+            {
+                queryParts.Add("duration_ms=" + (item.RunTimeTicks.Value / TimeSpan.TicksPerMillisecond));
+            }
+        }
+
+        private static string BuildApiUrl(string endpoint)
+        {
+            var configuredBaseUrl = Plugin.Instance?.Options?.IntroSkip?.TheIntroDbBaseUrl;
+            return (string.IsNullOrWhiteSpace(configuredBaseUrl) ? DefaultBaseUrl : configuredBaseUrl.Trim()).TrimEnd('/') + "/" + endpoint;
+        }
+
+        private static void InvalidateMarkerCache(BaseItem item)
+        {
+            var query = BuildLookupQuery(item, includeDuration: false);
+            if (!query.IsValid)
+            {
+                return;
+            }
+
+            PluginDiskCache.Remove(MarkerCacheScope, query.CacheKey, ".json");
+            Plugin.SharedLogger?.Debug("TheIntroDB 查询缓存已失效: {0}", FormatItemForLog(item));
         }
 
         private static IntroSegment SelectFirstValidIntro(IEnumerable<SegmentTimestamp> segments)

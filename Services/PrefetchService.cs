@@ -283,19 +283,19 @@ namespace MediaInfoKeeper.Services
 
             if (Plugin.DanmuService.ShouldSkipAutoDownload(item))
             {
-                logger.Info($"{source}: 跳过，已存在弹幕文件 {item.FileName ?? item.Name}");
+                logger.Debug($"{source}: 跳过，已存在弹幕文件 {item.FileName ?? item.Name}");
                 return Task.CompletedTask;
             }
 
             if (!prefetchingDanmuItemIds.TryAdd(item.InternalId, 0))
             {
-                logger.Info($"{source}: 跳过，拉取中 {item.FileName ?? item.Name}");
+                logger.Debug($"{source}: 跳过，拉取中 {item.FileName ?? item.Name}");
                 return Task.CompletedTask;
             }
 
             var alwaysFetchLatest = Plugin.Instance?.Options?.MetaData?.AlwaysFetchLatestDanmu == true;
 
-            logger.Info($"{source}: 开始 {item.FileName ?? item.Name}");
+            logger.Debug($"{source}: 开始 {item.FileName ?? item.Name}");
 
             return Task.Run(async () =>
             {
@@ -306,12 +306,12 @@ namespace MediaInfoKeeper.Services
                         .ConfigureAwait(false);
                     if (result?.Succeeded == true)
                     {
-                        logger.Info($"{source}: 完成 {item.FileName ?? item.Name}");
+                        logger.Debug($"{source}: 完成 {item.FileName ?? item.Name}");
                     }
                     else
                     {
                         var reason = string.IsNullOrWhiteSpace(result?.Reason) ? "未获取到内容" : result.Reason;
-                        logger.Info($"{source}: 跳过，{reason} {item.FileName ?? item.Name}");
+                        logger.Debug($"{source}: 跳过，{reason} {item.FileName ?? item.Name}");
                     }
                 }
                 catch (OperationCanceledException)
