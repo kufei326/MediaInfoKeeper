@@ -9,7 +9,6 @@ using MediaBrowser.Controller.Entities.TV;
 using MediaBrowser.Model.Logging;
 using MediaBrowser.Model.Tasks;
 using MediaInfoKeeper.Common;
-using MediaInfoKeeper.Options;
 
 namespace MediaInfoKeeper.ScheduledTask
 {
@@ -55,11 +54,8 @@ namespace MediaInfoKeeper.ScheduledTask
                 return;
             }
 
-            var networkFirst = string.Equals(
-                Plugin.Instance?.Options?.MetaData?.DanmuFetchMode,
-                MetaDataOptions.DanmuFetchModeOption.NetworkFirst.ToString(),
-                StringComparison.Ordinal);
-            this.logger.Info($"弹幕下载计划任务策略: {(networkFirst ? "网络优先(始终拉取并覆盖本地)" : "本地优先(本地存在则跳过)")}");
+            var alwaysFetchLatest = Plugin.Instance?.Options?.MetaData?.AlwaysFetchLatestDanmu == true;
+            this.logger.Info($"弹幕下载计划任务策略: {(alwaysFetchLatest ? "始终获取最新(拉取并覆盖本地)" : "本地存在则跳过")}");
 
             var completed = 0;
             foreach (var item in items)
@@ -72,7 +68,7 @@ namespace MediaInfoKeeper.ScheduledTask
                 try
                 {
                     var result = await Plugin.DanmuService
-                        .QueueDownloadWithReasonAsync(item.InternalId, networkFirst, cancellationToken)
+                        .QueueDownloadWithReasonAsync(item.InternalId, alwaysFetchLatest, cancellationToken)
                         .ConfigureAwait(false);
 
                     if (!result.Succeeded && !string.IsNullOrWhiteSpace(result.Reason))

@@ -884,11 +884,6 @@ define(['connectionManager', 'globalize', 'loading', 'toast', 'confirm'], functi
                 commands.push({ name: getCommandName(), id: 'extract_media_info', icon: '4k' });
                 commands.push({ name: getDeleteCommandName(), id: 'delete_media_info_persist', icon: 'delete_forever' });
 
-                const danmuSupportedTypes = { Movie: true, Episode: true, Season: true, Series: true };
-                if (items.every(item => danmuSupportedTypes[item.Type])) {
-                    commands.push({ name: getDownloadDanmuCommandName(), id: 'download_danmu', icon: 'subtitles' });
-                }
-
                 const introSupportedTypes = { Episode: true, Season: true, Series: true };
                 if (items.every(item => introSupportedTypes[item.Type])) {
                     commands.push({ name: getScanIntroCommandName(), id: 'scan_intro', icon: 'graphic_eq' });
@@ -931,10 +926,6 @@ define(['connectionManager', 'globalize', 'loading', 'toast', 'confirm'], functi
 
                 if (command === 'scan_external_files') {
                     return api.scanExternalFiles(ids);
-                }
-
-                if (command === 'download_danmu') {
-                    return api.downloadDanmu(ids);
                 }
 
                 if (command === 'set_intro') {

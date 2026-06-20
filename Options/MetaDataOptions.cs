@@ -11,12 +11,6 @@ namespace MediaInfoKeeper.Options
 {
     public class MetaDataOptions : EditableOptionsBase
     {
-        public enum DanmuFetchModeOption
-        {
-            LocalFirst,
-            NetworkFirst
-        }
-
         private static readonly string[] SupportedFallbackLanguages =
         {
             "zh-SG",
@@ -91,16 +85,14 @@ namespace MediaInfoKeeper.Options
         public string DanmuApiBaseUrl { get; set; } = string.Empty;
         
         [DisplayName("预加载弹幕")]
-        [Description("播放剧集时，预加载下一集弹幕到本地；遵循弹幕拉取策略。")]
+        [Description("播放剧集时，预加载下一集弹幕到本地。")]
         [VisibleCondition(nameof(EnableDanmuApi), SimpleCondition.IsTrue)]
         public bool EnableDanmuPrefetch { get; set; } = false;
         
-        [DisplayName("弹幕加载策略")]
-        [Description("本地优先：存在本地 xml 直接返回；不存在时拉取并写入本地。网络优先：先拉取最新 xml 并写入本地；失败则本地 xml 兜底。")]
-        [Editor(typeof(EditorSelectSingle), typeof(EditorBase))]
-        [SelectItemsSource(nameof(DanmuFetchModeList))]
+        [DisplayName("始终获取最新弹幕")]
+        [Description("开启后请求弹幕时会优先从 danmu_api 拉取最新 xml 并写入本地；拉取完成或超时后返回可用 xml。")]
         [VisibleCondition(nameof(EnableDanmuApi), SimpleCondition.IsTrue)]
-        public string DanmuFetchMode { get; set; } = DanmuFetchModeOption.LocalFirst.ToString();
+        public bool AlwaysFetchLatestDanmu { get; set; } = true;
         
         [DisplayName("启用 TVDB 中文回退")]
         [Description("按备选语言顺序补全 TVDB 电影/剧集/季/集元数据，并尽量把英文放到最后。")]
@@ -115,10 +107,6 @@ namespace MediaInfoKeeper.Options
         [SelectItemsSource(nameof(TvdbFallbackLanguageList))]
         public string TvdbFallbackLanguages { get; set; } = "zhtw,yue";
 
-        [Browsable(false)]
-        public List<EditorSelectOption> DanmuFetchModeList { get; set; } = new List<EditorSelectOption>();
-        
-        
         public void Initialize()
         {
             FallbackLanguageList.Clear();
@@ -143,25 +131,6 @@ namespace MediaInfoKeeper.Options
                 });
             }
 
-            if (!string.Equals(DanmuFetchMode, DanmuFetchModeOption.LocalFirst.ToString(), StringComparison.Ordinal) &&
-                !string.Equals(DanmuFetchMode, DanmuFetchModeOption.NetworkFirst.ToString(), StringComparison.Ordinal))
-            {
-                DanmuFetchMode = DanmuFetchModeOption.LocalFirst.ToString();
-            }
-
-            DanmuFetchModeList.Clear();
-            DanmuFetchModeList.Add(new EditorSelectOption
-            {
-                Name = "本地优先",
-                Value = DanmuFetchModeOption.LocalFirst.ToString(),
-                IsEnabled = true
-            });
-            DanmuFetchModeList.Add(new EditorSelectOption
-            {
-                Name = "网络优先",
-                Value = DanmuFetchModeOption.NetworkFirst.ToString(),
-                IsEnabled = true
-            });
         }
 
         public override IEditObjectContainer CreateEditContainer()
@@ -234,7 +203,7 @@ namespace MediaInfoKeeper.Options
                 nameof(EnableDanmuApi),
                 nameof(DanmuApiBaseUrl),
                 nameof(EnableDanmuPrefetch),
-                nameof(DanmuFetchMode));
+                nameof(AlwaysFetchLatestDanmu));
             
             AddGroup("TVDB", "",
                 nameof(EnableTvdbFallback),

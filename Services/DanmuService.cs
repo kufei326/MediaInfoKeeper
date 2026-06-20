@@ -10,7 +10,6 @@ using MediaBrowser.Controller.Entities;
 using MediaBrowser.Controller.Entities.Movies;
 using MediaBrowser.Controller.Entities.TV;
 using MediaBrowser.Model.Logging;
-using MediaInfoKeeper.Options;
 
 namespace MediaInfoKeeper.Services
 {
@@ -207,11 +206,7 @@ namespace MediaInfoKeeper.Services
                 return true;
             }
 
-            var networkFirst = string.Equals(
-                Plugin.Instance?.Options?.MetaData?.DanmuFetchMode,
-                MetaDataOptions.DanmuFetchModeOption.NetworkFirst.ToString(),
-                StringComparison.Ordinal);
-            if (networkFirst)
+            if (ShouldAlwaysFetchLatest())
             {
                 return false;
             }
@@ -258,11 +253,7 @@ namespace MediaInfoKeeper.Services
                 return Failed("路径信息不完整");
             }
 
-            var networkFirst = string.Equals(
-                Plugin.Instance?.Options?.MetaData?.DanmuFetchMode,
-                MetaDataOptions.DanmuFetchModeOption.NetworkFirst.ToString(),
-                StringComparison.Ordinal);
-            var overwrite = overwriteExisting || networkFirst;
+            var overwrite = overwriteExisting || ShouldAlwaysFetchLatest();
             var targetPath = GetDanmuXmlPath(item);
             if (!overwrite && File.Exists(targetPath))
             {
@@ -353,6 +344,11 @@ namespace MediaInfoKeeper.Services
                 Succeeded = false,
                 Reason = reason
             };
+        }
+
+        private static bool ShouldAlwaysFetchLatest()
+        {
+            return Plugin.Instance?.Options?.MetaData?.AlwaysFetchLatestDanmu == true;
         }
 
         private async Task<string> SearchEpisodeIdAsync(string baseUrl, string animeTitle, int episodeNumber, CancellationToken cancellationToken)

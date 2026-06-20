@@ -15,7 +15,6 @@ using MediaBrowser.Model.Entities;
 using MediaBrowser.Model.IO;
 using MediaBrowser.Model.Serialization;
 using MediaInfoKeeper.Common;
-using MediaInfoKeeper.Options;
 using MediaInfoKeeper.Store;
 using MediaInfoKeeper.Web.Handler;
 
@@ -104,15 +103,20 @@ namespace MediaInfoKeeper.Web
 
             var danmuXmlPath = Path.Combine(item.ContainingFolderPath, item.FileNameWithoutExtension + ".xml");
             var localExists = File.Exists(danmuXmlPath);
-            var fetchMode = Plugin.Instance?.Options?.MetaData?.DanmuFetchMode;
-            var networkFirst = string.Equals(fetchMode, MetaDataOptions.DanmuFetchModeOption.NetworkFirst.ToString(), StringComparison.Ordinal);
-            var modeLabel = networkFirst ? "网络优先" : "本地优先";
+            var alwaysFetchLatest = Plugin.Instance?.Options?.MetaData?.AlwaysFetchLatestDanmu == true;
+            var modeLabel = alwaysFetchLatest ? "始终获取最新" : "本地优先";
             var logContext = $"mode={modeLabel} itemId={request.ItemId} item={item.FileName}";
 
-            if (!networkFirst && localExists)
+            if (!alwaysFetchLatest && localExists)
             {
                 logger?.Debug($"弹幕API: 本地命中，直接返回 {logContext} path={danmuXmlPath}");
                 return _resultFactory.GetStaticFileResult(Request, danmuXmlPath, FileShareMode.Read).GetAwaiter().GetResult();
+            }
+
+            if (!alwaysFetchLatest)
+            {
+                logger?.Debug($"弹幕API: 本地未命中且未启用获取最新，返回空结果 {logContext} path={danmuXmlPath}");
+                return CreateEmptyDanmuResult();
             }
 
             if (Plugin.DanmuService?.IsSupportedItem(item) == true && Plugin.DanmuService.IsEnabled)
@@ -135,9 +139,7 @@ namespace MediaInfoKeeper.Web
                             }
 
                             File.WriteAllBytes(danmuXmlPath, xmlBytes);
-                            logger?.Debug(networkFirst
-                                ? $"弹幕API: 网络拉取成功并写入本地 {logContext} path={danmuXmlPath}"
-                                : $"弹幕API: 本地未命中，临时拉取并写入本地 {logContext} path={danmuXmlPath}");
+                            logger?.Debug($"弹幕API: 最新弹幕拉取成功并写入本地 {logContext} path={danmuXmlPath}");
                         }
                         catch (Exception ex)
                         {
@@ -157,9 +159,9 @@ namespace MediaInfoKeeper.Web
                 }
             }
 
-            if (networkFirst && localExists)
+            if (alwaysFetchLatest && localExists)
             {
-                logger?.Debug($"弹幕API: 网络优先回退本地 {logContext} path={danmuXmlPath}");
+                logger?.Debug($"弹幕API: 获取最新失败或超时，回退本地 {logContext} path={danmuXmlPath}");
                 return _resultFactory.GetStaticFileResult(Request, danmuXmlPath, FileShareMode.Read).GetAwaiter().GetResult();
             }
 

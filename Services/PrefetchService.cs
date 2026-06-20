@@ -4,7 +4,6 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
-using MediaInfoKeeper.Options;
 using MediaBrowser.Controller.Entities;
 using MediaBrowser.Controller.Entities.Audio;
 using MediaBrowser.Controller.Entities.TV;
@@ -301,10 +300,7 @@ namespace MediaInfoKeeper.Services
                 return Task.CompletedTask;
             }
 
-            var networkFirst = string.Equals(
-                Plugin.Instance?.Options?.MetaData?.DanmuFetchMode,
-                MetaDataOptions.DanmuFetchModeOption.NetworkFirst.ToString(),
-                StringComparison.Ordinal);
+            var alwaysFetchLatest = Plugin.Instance?.Options?.MetaData?.AlwaysFetchLatestDanmu == true;
 
             logger.Info($"{source}: 开始 {item.FileName ?? item.Name}");
 
@@ -313,7 +309,7 @@ namespace MediaInfoKeeper.Services
                 try
                 {
                     var result = await Plugin.DanmuService
-                        .QueueDownloadWithReasonAsync(item.InternalId, networkFirst, cancellationToken)
+                        .QueueDownloadWithReasonAsync(item.InternalId, alwaysFetchLatest, cancellationToken)
                         .ConfigureAwait(false);
                     if (result?.Succeeded == true)
                     {
