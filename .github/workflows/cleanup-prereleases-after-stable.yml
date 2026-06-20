@@ -21,7 +21,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Cleanup prereleases older than latest stable
+      - name: Cleanup prereleases covered by latest stable
         if: |
           github.event_name == 'workflow_dispatch' ||
           github.event_name == 'workflow_call' ||
@@ -64,11 +64,17 @@ jobs:
             });
 
             const stableReleases = releases
-              .filter((release) => !release.draft && !release.prerelease)
-              .sort((a, b) => new Date(getSortTime(b)).getTime() - new Date(getSortTime(a)).getTime());
+              .map((release) => ({
+                release,
+                version: !release.draft && !release.prerelease
+                  ? parseVersionParts(release.tag_name, stableTagPattern)
+                  : null,
+              }))
+              .filter((candidate) => candidate.version)
+              .sort((a, b) => compareVersionParts(b.version, a.version));
 
             if (stableReleases.length === 0) {
-              core.setFailed("No stable release found.");
+              core.setFailed("No parseable stable release found.");
               return;
             }
 
@@ -78,21 +84,16 @@ jobs:
                 .filter((tagName) => typeof tagName === "string" && tagName.length > 0)
             );
 
-            const latestStable = stableReleases[0];
+            const latestStable = stableReleases[0].release;
             const latestStableTime = new Date(getSortTime(latestStable)).getTime();
-            const latestStableVersion = parseVersionParts(latestStable.tag_name, stableTagPattern);
-
-            if (!latestStableVersion) {
-              core.setFailed(`Unable to parse latest stable tag: ${latestStable.tag_name}`);
-              return;
-            }
+            const latestStableVersion = stableReleases[0].version;
 
             const stalePrereleases = releases
               .filter((release) => !release.draft && release.prerelease)
               .filter((release) => {
                 const prereleaseVersion = parseVersionParts(release.tag_name, prereleaseTagPattern);
                 if (prereleaseVersion) {
-                  return compareVersionParts(prereleaseVersion, latestStableVersion) < 0;
+                  return compareVersionParts(prereleaseVersion, latestStableVersion) <= 0;
                 }
 
                 const releaseTime = new Date(getSortTime(release)).getTime();
@@ -153,7 +154,7 @@ jobs:
               }
 
               const betaVersion = parseVersionParts(tagName, prereleaseTagPattern);
-              if (betaVersion && compareVersionParts(betaVersion, latestStableVersion) < 0) {
+              if (betaVersion && compareVersionParts(betaVersion, latestStableVersion) <= 0) {
                 orphanBetaTags.push({ tagName, refTime: "version-match" });
                 continue;
               }
@@ -203,5 +204,5 @@ jobs:
             }
 
             core.notice(
-              `Deleted ${stalePrereleases.length} prerelease(s) and ${orphanBetaTags.length} orphan beta tag(s) older than ${latestStable.tag_name}.`
+              `Deleted ${stalePrereleases.length} prerelease(s) and ${orphanBetaTags.length} orphan beta tag(s) covered by ${latestStable.tag_name}.`
             );
