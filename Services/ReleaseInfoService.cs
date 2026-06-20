@@ -319,14 +319,6 @@ namespace MediaInfoKeeper.Services
             this.UpdateHistoryCacheFromReleases(releases, currentChannel);
         }
 
-        private List<ReleaseInfo> GetCachedReleases()
-        {
-            lock (this.syncRoot)
-            {
-                return this.releaseCache.ToList();
-            }
-        }
-
         private void StoreReleaseCache(List<ReleaseInfo> releases)
         {
             lock (this.syncRoot)
