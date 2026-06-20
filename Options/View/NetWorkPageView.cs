@@ -24,8 +24,8 @@ namespace MediaInfoKeeper.Options.View
 
         public override async Task<IPluginUIView> OnSaveCommand(string itemId, string commandId, string data)
         {
-            var proxyProbeTask = ProxyLatencyProbe.RunAsync(this.Options);
-            var tmdbProbeTask = TmdbAltProbe.RunAsync(this.Options);
+            var proxyProbeTask = NetworkProbe.RunProxyLatencyAsync(this.Options);
+            var tmdbProbeTask = NetworkProbe.RunTmdbAltAsync(this.Options);
             await Task.WhenAll(proxyProbeTask, tmdbProbeTask).ConfigureAwait(false);
 
             var proxyResult = proxyProbeTask.Result;
