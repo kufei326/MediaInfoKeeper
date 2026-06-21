@@ -301,6 +301,9 @@ namespace MediaInfoKeeper.Options
 
         public GenericItemList ScheduledTaskEntries { get; set; } = new GenericItemList();
 
+        [DisplayName("刷新队列")]
+        public StatusItem RefreshQueueStatus { get; set; } = new StatusItem("刷新队列", "元数据刷新：0 / 0  · 0 等待\n媒体信息提取：0 / 0  · 0 等待", ItemStatus.Succeeded);
+
         public LabelItem UpdatePluginProjectUrl { get; set; } = new LabelItem("https://github.com/honue/MediaInfoKeeper")
         {
             HyperLink = "https://github.com/honue/MediaInfoKeeper",
@@ -428,7 +431,8 @@ namespace MediaInfoKeeper.Options
             AddGroup("插件", string.Empty,
                 nameof(PlugginEnabled),
                 nameof(FileChangeRefreshDelaySeconds),
-                nameof(CatchupLibraries));
+                nameof(CatchupLibraries),
+                nameof(RefreshQueueStatus));
 
             AddGroup("计划任务配置", string.Empty,
                 nameof(ScheduledTaskEntries),

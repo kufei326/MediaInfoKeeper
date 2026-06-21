@@ -104,6 +104,10 @@ namespace MediaInfoKeeper.Options
         [DisplayName("接管系统新入库通知")]
         [Description("关闭时不接管 Emby 原生新入库通知，收藏剧集更新使用插件的 favorites.update 通知；开启时屏蔽 Emby 原生 library.new 通知，并让收藏剧集更新改用 library.new 通知。")]
         public bool TakeOverSystemLibraryNew { get; set; } = false;
+
+        [DisplayName("接管刷新队列")]
+        [Description("接管 Emby 原生元数据刷新队列入口，按刷新意图分流到插件的元数据/媒体信息 runner，并使用插件并发设置控制执行。")]
+        public bool TakeOverRefreshQueue { get; set; } = true;
         
         [DisplayName("优化封面显示")]
         [Description("优化显示集封面 16:9 铺满，不会有上下黑边。")]
@@ -310,6 +314,9 @@ namespace MediaInfoKeeper.Options
             AddGroup("通知", "", 
                 nameof(EnableNotificationEnhance),
                 nameof(TakeOverSystemLibraryNew));
+
+            AddGroup("刷新调度", "",
+                nameof(TakeOverRefreshQueue));
             
             AddGroup("多版本合并", "",
                 nameof(MergeMultiVersion),

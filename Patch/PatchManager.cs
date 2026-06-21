@@ -148,6 +148,17 @@ namespace MediaInfoKeeper.Patch
 
             registrations.Add(new PatchRegistration
             {
+                Name = "RefreshQueueHijack",
+                Initialize = _ => RefreshQueueHijack.Initialize(logger, true),
+                Configure = options => RefreshQueueHijack.SetEnabled(
+                    IsPluginEnabled(options) && options.Enhance.TakeOverRefreshQueue),
+                IsEnabled = options => IsPluginEnabled(options) && options.Enhance.TakeOverRefreshQueue,
+                IsReady = () => RefreshQueueHijack.IsReady,
+                Notes = () => "fire Emby QueueRefresh through metadata runner"
+            });
+
+            registrations.Add(new PatchRegistration
+            {
                 Name = "FFProbeHasChanged",
                 Initialize = _ => FFProbeHasChanged.Initialize(logger, true),
                 Configure = options => FFProbeHasChanged.Configure(IsPluginEnabled(options)),

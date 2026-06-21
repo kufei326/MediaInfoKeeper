@@ -22,16 +22,16 @@
   <a href="LICENSE">
     <img src="https://img.shields.io/github/license/honue/MediaInfoKeeper" />
   </a>
+  <a href="https://github.com/honue/MediaInfoKeeper/wiki">
+    <img src="https://img.shields.io/badge/Wiki-功能说明-blue?logo=github&amp;logoColor=white" />
+  </a>
+  <a href="https://t.me/EmbyPatch">
+    <img src="https://img.shields.io/badge/Telegram群组-EmbyPatch-26A5E4?logo=telegram&amp;logoColor=white" />
+  </a>
 </p>
 <p align="center">
   <img src="Resources/ScreenShot.png" alt="MediaInfoKeeper" width="640" />
 </p>
-
-📖 文档
-----
-
-- [Wiki](https://github.com/honue/MediaInfoKeeper/wiki)
-- [Channel](https://t.me/EmbyPatch_Channel)
 
 ⏬ 安装
 --------

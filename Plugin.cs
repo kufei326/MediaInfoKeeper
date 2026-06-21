@@ -175,6 +175,7 @@ namespace MediaInfoKeeper
 
             var initialOptions = this.Options;
             PersistOptionsOnStartup(initialOptions);
+            ConfigureRunners(initialOptions);
             PatchManager.Initialize(this.logger, initialOptions, activityManager);
 
             this.PlugginEnabled = initialOptions.MainPage?.PlugginEnabled ?? true;
@@ -358,6 +359,7 @@ namespace MediaInfoKeeper
             var netWorkOptions = options.GetNetWorkOptions();
 
             this.PlugginEnabled = options.MainPage.PlugginEnabled;
+            ConfigureRunners(options);
 
             LogOptionsSnapshot(options, "已更新");
             
@@ -376,6 +378,16 @@ namespace MediaInfoKeeper
 
             ConfigureStrmFileWatcher();
 
+        }
+
+        private static void ConfigureRunners(PluginConfiguration options)
+        {
+            var safeOptions = options ?? new PluginConfiguration();
+            safeOptions.MediaInfo ??= new MediaInfoOptions();
+            safeOptions.MetaData ??= new MetaDataOptions();
+
+            MediaInfoRunner.Configure(safeOptions.MediaInfo.MaxConcurrentCount);
+            MetaDataRunner.Configure(safeOptions.MetaData.MaxConcurrentCount);
         }
 
         internal void UpdatePinyinSortNameLastProcessedAt(DateTimeOffset processedAt)
