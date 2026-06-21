@@ -76,7 +76,7 @@ namespace MediaInfoKeeper.Store
                 document.EmbeddedImage = embeddedImage;
             }
             SaveDocuments(documents, document, mediaInfoJsonPath);
-            this.logger.Info($"EmbeddedInfoStore 写入音乐元数据成功: {(item.FileName ?? item.Path)}");
+            this.logger.Debug($"EmbeddedInfoStore 写入音乐元数据成功: {(item.FileName ?? item.Path)}");
         }
 
         public void OverWriteImageToFile(BaseItem item)
@@ -97,7 +97,7 @@ namespace MediaInfoKeeper.Store
 
             document.EmbeddedImage = embeddedImage;
             SaveDocuments(documents, document, mediaInfoJsonPath);
-            this.logger.Info($"EmbeddedInfoStore 写入音乐主图成功: {(item.FileName ?? item.Path)}");
+            this.logger.Debug($"EmbeddedInfoStore 写入音乐主图成功: {(item.FileName ?? item.Path)}");
         }
 
         public MediaInfoDocument.MediaInfoRestoreResult ApplyToItem(BaseItem item)

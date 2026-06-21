@@ -68,7 +68,7 @@ namespace MediaInfoKeeper.Store
             var document = documents.FirstOrDefault() ?? new MediaInfoDocument();
             if (document.MediaSourceInfo != null)
             {
-                this.logger.Info($"MediaSourceInfoStore 写入媒体源信息跳过: {(item.FileName ?? item.Path)} JSON 已存在");
+                this.logger.Debug($"MediaSourceInfoStore 写入媒体源信息跳过: {(item.FileName ?? item.Path)} JSON 已存在");
                 return false;
             }
 
@@ -81,7 +81,7 @@ namespace MediaInfoKeeper.Store
 
             document.MediaSourceInfo = mediaSourceInfo;
             SaveDocuments(documents, document, mediaInfoJsonPath);
-            this.logger.Info($"MediaSourceInfoStore 写入媒体源信息成功: {(item.FileName ?? item.Path)}");
+            this.logger.Debug($"MediaSourceInfoStore 写入媒体源信息成功: {(item.FileName ?? item.Path)}");
             return true;
         }
 
@@ -99,7 +99,7 @@ namespace MediaInfoKeeper.Store
 
             document.MediaSourceInfo = mediaSourceInfo;
             SaveDocuments(documents, document, mediaInfoJsonPath);
-            this.logger.Info($"MediaSourceInfoStore 写入媒体源信息成功: {(item.FileName ?? item.Path)}");
+            this.logger.Debug($"MediaSourceInfoStore 写入媒体源信息成功: {(item.FileName ?? item.Path)}");
         }
 
         public bool DeleteFromFile(BaseItem item)
@@ -109,7 +109,7 @@ namespace MediaInfoKeeper.Store
             var document = documents.FirstOrDefault();
             if (document?.MediaSourceInfo == null)
             {
-                this.logger.Info($"MediaSourceInfoStore 删除Json媒体源信息跳过: {(item.FileName ?? item.Path)}");
+                this.logger.Debug($"MediaSourceInfoStore 删除Json媒体源信息跳过: {(item.FileName ?? item.Path)}");
                 return false;
             }
 
