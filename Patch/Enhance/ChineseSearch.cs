@@ -19,6 +19,7 @@ using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
 using MediaBrowser.Model.Logging;
+using SQLitePCLEx;
 
 namespace MediaInfoKeeper.Patch
 {
@@ -48,6 +49,7 @@ namespace MediaInfoKeeper.Patch
         private static bool enhanceChineseSearchEnabled;
         private static bool enhanceChineseSearchRestoreEnabled;
         private static bool excludeOriginalTitleFromSearch;
+        private static bool sqlitePclRawExAssemblyResolverAttached;
         public static bool IsReady => isInitialized;
 
         private static ILogger logger;
@@ -97,8 +99,13 @@ namespace MediaInfoKeeper.Patch
 
                 try
                 {
+                    if (!sqlitePclRawExAssemblyResolverAttached)
+                    {
+                        AppDomain.CurrentDomain.AssemblyResolve += ResolveSQLitePclRawExFromLoadedAssemblies;
+                        sqlitePclRawExAssemblyResolverAttached = true;
+                    }
+
                     var resolverVersion = Plugin.Instance?.AppHost?.ApplicationVersion ?? new Version(0, 0, 0, 0);
-                    var sqlitePclEx = Assembly.Load("SQLitePCLRawEx.core");
 
                     sqlite3_db = typeof(SQLiteDatabaseConnection)
                         .GetField("db", BindingFlags.NonPublic | BindingFlags.Instance);
@@ -182,7 +189,7 @@ namespace MediaInfoKeeper.Patch
                         "ChineseSearch.CacheIdsFromTextParams");
 
                     if (createConnection == null || dbFilePath == null || getJoinCommandText == null ||
-                        cacheIdsFromTextParams == null || sqlite3_db == null || sqlitePclEx == null)
+                        cacheIdsFromTextParams == null || sqlite3_db == null)
                     {
                         PatchLog.InitFailed(logger, nameof(ChineseSearch), "缺少反射目标");
                         return;
@@ -318,11 +325,6 @@ namespace MediaInfoKeeper.Patch
             }
 
             includeItemTypes = includeTypes.ToArray();
-        }
-
-        public static string[] GetSearchScope()
-        {
-            return includeItemTypes;
         }
 
         private static bool PatchCreateConnection()
@@ -509,7 +511,7 @@ namespace MediaInfoKeeper.Patch
             IDatabaseConnection connection = null;
             try
             {
-                connection = OpenLibraryConnection(repository);
+                connection = createConnection?.Invoke(repository, new object[] { false, CancellationToken.None }) as IDatabaseConnection;
                 if (connection == null)
                 {
                     logger?.Warn("增强搜索 - 跳过重建搜索索引：数据库连接不可用。");
@@ -548,11 +550,6 @@ namespace MediaInfoKeeper.Patch
             {
                 (connection as IDisposable)?.Dispose();
             }
-        }
-
-        private static IDatabaseConnection OpenLibraryConnection(object repository)
-        {
-            return createConnection?.Invoke(repository, new object[] { false, CancellationToken.None }) as IDatabaseConnection;
         }
 
         private static bool RebuildFts(IDatabaseConnection connection, string ftsTableName, string tokenizerName)
@@ -853,11 +850,6 @@ namespace MediaInfoKeeper.Patch
             return false;
         }
 
-        private static bool LoadTokenizerExtension(IDatabaseConnection connection)
-        {
-            return LoadTokenizerExtension(connection, true);
-        }
-
         private static bool LoadTokenizerExtension(IDatabaseConnection connection, bool logErrors)
         {
             if (connection == null)
@@ -876,7 +868,7 @@ namespace MediaInfoKeeper.Patch
 
             try
             {
-                var db = (SQLitePCLEx.sqlite3)sqlite3_db.GetValue(connection);
+                var db = (sqlite3)sqlite3_db.GetValue(connection);
                 if (!LoadTokenizerExtensionNative(db, logErrors))
                 {
                     return false;
@@ -909,9 +901,9 @@ namespace MediaInfoKeeper.Patch
             return false;
         }
 
-        private static bool LoadTokenizerExtensionNative(SQLitePCLEx.sqlite3 db, bool logErrors)
+        private static bool LoadTokenizerExtensionNative(sqlite3 db, bool logErrors)
         {
-            var enableResult = SQLitePCLEx.raw.sqlite3_enable_load_extension(db, 1);
+            var enableResult = raw.sqlite3_enable_load_extension(db, 1);
             if (enableResult != 0)
             {
                 if (logErrors)
@@ -922,9 +914,9 @@ namespace MediaInfoKeeper.Patch
                 return false;
             }
 
-            var file = SQLitePCLEx.utf8z.FromString(tokenizerPath.AsSpan());
-            var proc = SQLitePCLEx.utf8z.FromString("sqlite3_simple_init".AsSpan());
-            var loadResult = SQLitePCLEx.raw.sqlite3_load_extension(db, file, proc, out var error);
+            var file = utf8z.FromString(tokenizerPath.AsSpan());
+            var proc = utf8z.FromString("sqlite3_simple_init".AsSpan());
+            var loadResult = raw.sqlite3_load_extension(db, file, proc, out var error);
             if (loadResult == 0)
             {
                 return true;
@@ -941,6 +933,28 @@ namespace MediaInfoKeeper.Patch
             }
 
             return false;
+        }
+
+        private static Assembly ResolveSQLitePclRawExFromLoadedAssemblies(object sender, ResolveEventArgs args)
+        {
+            AssemblyName requestedName;
+            try
+            {
+                requestedName = new AssemblyName(args.Name);
+            }
+            catch
+            {
+                return null;
+            }
+
+            if (!string.Equals(requestedName.Name, "SQLitePCLRawEx.core", StringComparison.OrdinalIgnoreCase))
+            {
+                return null;
+            }
+
+            return AppDomain.CurrentDomain
+                .GetAssemblies()
+                .FirstOrDefault(a => string.Equals(a.GetName().Name, requestedName.Name, StringComparison.OrdinalIgnoreCase));
         }
 
         private static int GetTokenizerConnectionKey(IDatabaseConnection connection)
@@ -1112,7 +1126,7 @@ namespace MediaInfoKeeper.Patch
                 var searchTerm = query.SearchTerm;
                 if (query.IncludeItemTypes.Length == 0 && !string.IsNullOrEmpty(searchTerm))
                 {
-                    query.IncludeItemTypes = GetSearchScope();
+                    query.IncludeItemTypes = includeItemTypes;
                 }
 
                 if (!string.IsNullOrEmpty(searchTerm))
