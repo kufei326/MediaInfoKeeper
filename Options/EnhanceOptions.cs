@@ -71,6 +71,7 @@ namespace MediaInfoKeeper.Options
                 SearchItemType.Movie,
                 SearchItemType.Collection,
                 SearchItemType.Series,
+                SearchItemType.Person,
                 SearchItemType.MusicAlbum,
                 SearchItemType.MusicTrack
             });
