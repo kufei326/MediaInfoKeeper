@@ -626,7 +626,11 @@ namespace MediaInfoKeeper
 
                     if (!(item is Video) && !(item is Audio))
                     {
-                        // 仅处理音视频条目。
+                        // 仅处理音视频条目,补刷 Series Season 等等。
+                        if (item is Folder)
+                        {
+                            _ = MetaDataRunner.RefreshMetaDataAsync(itemId, priority: RefreshPriority.Highest, allowFfProcess:true);
+                        }
                         return;
                     }
                     this.logger.Info($"新入库事件 {item.FileName ?? item.Path}");
