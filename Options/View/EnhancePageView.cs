@@ -141,7 +141,15 @@ namespace MediaInfoKeeper.Options.View
 
         private static bool IsBrokenPath(string path)
         {
-            return !string.IsNullOrWhiteSpace(path) && !File.Exists(path);
+            return !string.IsNullOrWhiteSpace(path) &&
+                   !IsHttpUrl(path) &&
+                   !File.Exists(path);
+        }
+
+        private static bool IsHttpUrl(string path)
+        {
+            return path.StartsWith("http://", StringComparison.OrdinalIgnoreCase) ||
+                   path.StartsWith("https://", StringComparison.OrdinalIgnoreCase);
         }
     }
 }
