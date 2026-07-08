@@ -1,7 +1,9 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
 using System.Threading;
+using System.Threading.Tasks;
 using HarmonyLib;
 using MediaBrowser.Controller.Dto;
 using MediaBrowser.Controller.Entities;
@@ -14,7 +16,7 @@ using MediaBrowser.Model.Logging;
 namespace MediaInfoKeeper.Patch
 {
     /// <summary>
-    /// 当歌曲条目缺少主图时，优先使用专辑（展示父级）主图作为 DTO 的主图回退。
+    /// 当歌曲或音乐专辑缺少主图时，优先使用专辑/子歌曲可用封面作为 DTO 与图片接口回退。
     /// </summary>
     public static class AudioAlbumPrimaryFallback
     {
@@ -26,6 +28,8 @@ namespace MediaInfoKeeper.Patch
         private static bool isPatched;
         private static MethodInfo getBaseItemDtoInternal;
         private static MethodInfo getImageCacheTag;
+        private static MethodInfo getImage;
+        private static Type imageRequestType;
 
         public static bool IsReady => harmony != null && (!isEnabled || isPatched);
 
@@ -47,9 +51,18 @@ namespace MediaInfoKeeper.Patch
                     var implementationAssembly = Assembly.Load("Emby.Server.Implementations");
                     var implementationVersion = implementationAssembly?.GetName().Version;
                     var dtoServiceType = implementationAssembly?.GetType("Emby.Server.Implementations.Dto.DtoService", false);
+                    var apiAssembly = Assembly.Load("Emby.Api");
+                    var apiVersion = apiAssembly?.GetName().Version;
+                    var imageServiceType = apiAssembly?.GetType("Emby.Api.Images.ImageService", false);
+                    imageRequestType = apiAssembly?.GetType("Emby.Api.Images.ImageRequest", false);
                     if (dtoServiceType == null)
                     {
                         PatchLog.InitFailed(logger, nameof(AudioAlbumPrimaryFallback), "未找到 DtoService");
+                        return;
+                    }
+                    if (imageServiceType == null || imageRequestType == null)
+                    {
+                        PatchLog.InitFailed(logger, nameof(AudioAlbumPrimaryFallback), "未找到 ImageService/ImageRequest");
                         return;
                     }
 
@@ -93,7 +106,28 @@ namespace MediaInfoKeeper.Patch
                         logger,
                         "AudioAlbumPrimaryFallback.DtoService.GetImageCacheTag");
 
-                    if (getBaseItemDtoInternal == null || getImageCacheTag == null)
+                    getImage = PatchMethodResolver.Resolve(
+                        imageServiceType,
+                        apiVersion,
+                        new MethodSignatureProfile
+                        {
+                            Name = "imageservice-getimage",
+                            MethodName = "GetImage",
+                            BindingFlags = BindingFlags.Instance | BindingFlags.Public,
+                            IsStatic = false,
+                            ParameterTypes = new[]
+                            {
+                                imageRequestType,
+                                typeof(long),
+                                typeof(BaseItem),
+                                typeof(bool)
+                            },
+                            ReturnType = typeof(Task<object>)
+                        },
+                        logger,
+                        "AudioAlbumPrimaryFallback.ImageService.GetImage");
+
+                    if (getBaseItemDtoInternal == null || getImageCacheTag == null || getImage == null)
                     {
                         PatchLog.InitFailed(logger, nameof(AudioAlbumPrimaryFallback), "DTO 图片相关方法缺失");
                         return;
@@ -148,6 +182,9 @@ namespace MediaInfoKeeper.Patch
             harmony.Patch(
                 getBaseItemDtoInternal,
                 postfix: new HarmonyMethod(typeof(AudioAlbumPrimaryFallback), nameof(GetBaseItemDtoInternalPostfix)));
+            harmony.Patch(
+                getImage,
+                prefix: new HarmonyMethod(typeof(AudioAlbumPrimaryFallback), nameof(GetImagePrefix)));
             isPatched = true;
         }
 
@@ -159,6 +196,7 @@ namespace MediaInfoKeeper.Patch
             }
 
             harmony.Unpatch(getBaseItemDtoInternal, HarmonyPatchType.Postfix, harmony.Id);
+            harmony.Unpatch(getImage, HarmonyPatchType.Prefix, harmony.Id);
             isPatched = false;
         }
 
@@ -169,11 +207,29 @@ namespace MediaInfoKeeper.Patch
             User user,
             ref BaseItemDto __result)
         {
-            if (!isEnabled || __instance == null || item is not Audio audio || __result == null)
+            if (!isEnabled || __instance == null || item == null || __result == null)
             {
                 return;
             }
 
+            if (item is Audio audio)
+            {
+                ApplyAudioPrimaryFallback(__instance, audio, user, __result);
+                return;
+            }
+
+            if (item is MusicAlbum musicAlbum)
+            {
+                ApplyMusicAlbumPrimaryFallback(__instance, musicAlbum, user, __result);
+            }
+        }
+
+        private static void ApplyAudioPrimaryFallback(
+            object dtoService,
+            Audio audio,
+            User user,
+            BaseItemDto dto)
+        {
             if (audio.GetImageInfo(ImageType.Primary, 0) != null)
             {
                 return;
@@ -194,19 +250,113 @@ namespace MediaInfoKeeper.Patch
             try
             {
                 var displayParentPrimaryTag = getImageCacheTag?.Invoke(
-                    __instance,
+                    dtoService,
                     new object[] { imageOwner, imageInfo }) as string;
                 if (string.IsNullOrWhiteSpace(displayParentPrimaryTag))
                 {
                     return;
                 }
 
-                __result.PrimaryImageItemId = imageOwner.GetClientId();
-                __result.PrimaryImageTag = displayParentPrimaryTag;
+                dto.PrimaryImageItemId = imageOwner.GetClientId();
+                dto.PrimaryImageTag = displayParentPrimaryTag;
             }
             catch (Exception ex)
             {
                 logger?.Debug("AudioAlbumPrimaryFallback failed: {0}", ex.Message);
+            }
+        }
+
+        [HarmonyPrefix]
+        private static void GetImagePrefix(
+            object __0,
+            ref long __1,
+            ref BaseItem __2)
+        {
+            if (!isEnabled || __0 == null || __1 == 0)
+            {
+                return;
+            }
+
+            try
+            {
+                if (!IsPrimaryImageRequest(__0))
+                {
+                    return;
+                }
+
+                var item = __2 ?? Plugin.LibraryManager?.GetItemById(__1);
+                if (item is not MusicAlbum musicAlbum || musicAlbum.GetImageInfo(ImageType.Primary, 0) != null)
+                {
+                    return;
+                }
+
+                if (!TryResolvePrimaryImageSource(musicAlbum, null, out var imageOwner, out var imageInfo) ||
+                    imageOwner == null ||
+                    imageInfo == null ||
+                    imageOwner.InternalId == musicAlbum.InternalId)
+                {
+                    return;
+                }
+
+                __1 = imageOwner.InternalId;
+                __2 = imageOwner;
+            }
+            catch (Exception ex)
+            {
+                logger?.Debug("AudioAlbumPrimaryFallback image request failed: {0}", ex.Message);
+            }
+        }
+
+        private static bool IsPrimaryImageRequest(object request)
+        {
+            var typeProperty = request.GetType().GetProperty("Type");
+            if (typeProperty?.GetValue(request) is not ImageType imageType || imageType != ImageType.Primary)
+            {
+                return false;
+            }
+
+            var indexProperty = request.GetType().GetProperty("Index");
+            return indexProperty?.GetValue(request) is not int index || index == 0;
+        }
+
+        private static void ApplyMusicAlbumPrimaryFallback(
+            object dtoService,
+            MusicAlbum musicAlbum,
+            User user,
+            BaseItemDto dto)
+        {
+            if (musicAlbum.GetImageInfo(ImageType.Primary, 0) != null)
+            {
+                return;
+            }
+
+            if (!TryResolvePrimaryImageSource(musicAlbum, user, out var imageOwner, out var imageInfo))
+            {
+                return;
+            }
+
+            try
+            {
+                var primaryTag = getImageCacheTag?.Invoke(
+                    dtoService,
+                    new object[] { imageOwner, imageInfo }) as string;
+                if (string.IsNullOrWhiteSpace(primaryTag))
+                {
+                    return;
+                }
+
+                dto.PrimaryImageItemId = imageOwner.GetClientId();
+                dto.PrimaryImageTag = primaryTag;
+                if (dto.ImageTags == null)
+                {
+                    dto.ImageTags = new Dictionary<ImageType, string>();
+                }
+
+                dto.ImageTags[ImageType.Primary] = primaryTag;
+            }
+            catch (Exception ex)
+            {
+                logger?.Debug("AudioAlbumPrimaryFallback album failed: {0}", ex.Message);
             }
         }
 

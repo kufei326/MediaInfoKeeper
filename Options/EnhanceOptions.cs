@@ -128,8 +128,8 @@ namespace MediaInfoKeeper.Options
         [Description("当 episode 没有自己的封面图时，优先提供 series 的背景图。")]
         public bool EnableEpisodeBackdropFallback { get; set; } = true;
 
-        [DisplayName("歌曲缺失封面回退专辑封面")]
-        [Description("当歌曲没有 Primary 封面时，优先使用专辑封面。")]
+        [DisplayName("音乐封面回退增强")]
+        [Description("当歌曲或音乐专辑缺少直接 Primary 封面时，优先使用专辑/子歌曲可用封面。")]
         public bool EnableAudioAlbumPrimaryFallback { get; set; } = true;
         
         [DisplayName("启用 NFO 增强")]
