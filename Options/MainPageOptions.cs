@@ -43,11 +43,11 @@ namespace MediaInfoKeeper.Options
 
             [DisplayName("替换现有图像")]
             [Description("基于媒体库选项，将删除全部现有图像，并下载新图像。")]
-            public bool ReplaceExistingImages { get; set; } = true;
+            public bool ReplaceExistingImages { get; set; } = false;
 
             [DisplayName("替换现有视频预览缩略图")]
             [Description("如果在媒体库选项中启用此功能，将删除现有视频预览缩略图并生成新的缩略图。")]
-            public bool ReplaceExistingVideoPreviewThumbnails { get; set; } = true;
+            public bool ReplaceExistingVideoPreviewThumbnails { get; set; } = false;
 
             [DisplayName("允许使用 ffprocess")]
             [Description("Strm 需要截图或提取内嵌信息时，允许执行 ffprocess。")]
