@@ -1,4 +1,4 @@
-name: Bug 报告
+name: Bug Report
 description: 只提交可复现、有日志、已排除使用问题的 Bug
 title: "[Bug] "
 labels:
@@ -25,83 +25,29 @@ body:
         - label: 我已经使用 LLM 分析过日志，并会提供完整 Emby 日志文件
           required: true
 
-  - type: input
-    id: plugin-version
+  - type: textarea
+    id: environment
     attributes:
-      label: MediaInfoKeeper 版本
-      description: 可在插件页面或下载文件来源中查看。
-      placeholder: 例如：1.0.0
-    validations:
-      required: true
-
-  - type: input
-    id: emby-version
-    attributes:
-      label: Emby 版本
-      description: 请填写完整版本号。
-      placeholder: 例如：4.9.5.0
-    validations:
-      required: true
-
-  - type: dropdown
-    id: platform
-    attributes:
-      label: 运行平台
-      options:
-        - Windows
-        - Linux
-        - macOS
-        - Docker
-        - 群晖 / Synology
-        - 其他
+      label: 环境信息
+      description: 填写 MediaInfoKeeper 版本、Emby 完整版本和运行平台。
+      placeholder: |
+        MediaInfoKeeper：
+        Emby：
+        运行平台：
     validations:
       required: true
 
   - type: textarea
     id: problem
     attributes:
-      label: Bug 描述
-      description: 说明发生了什么，以及影响了哪个功能。不要只写“不能用”“异常”“失效”。
-      placeholder: 例如：重启 Emby 后插件无法加载，或外部字幕信息没有保留。
-    validations:
-      required: true
-
-  - type: textarea
-    id: why-bug
-    attributes:
-      label: 为什么你认为这是 MediaInfoKeeper 的 Bug
-      description: 说明你已经排除了哪些使用问题。无法说明的，请先不要提交 Issue。
+      label: 问题说明
+      description: 说明问题、复现步骤、预期与实际结果，以及为什么认为这是 MediaInfoKeeper 的 Bug。
       placeholder: |
-        例如：
-        - 相同媒体在禁用插件后行为正常 / 异常消失
-        - 插件更新前正常，更新后在相同配置下稳定复现
-        - 已确认不是 Emby 不支持版本、插件文件名错误、权限问题或配置项导致
-    validations:
-      required: true
-
-  - type: textarea
-    id: steps
-    attributes:
-      label: 复现步骤
-      description: 简要说明触发问题的关键操作。不能复现的问题通常无法处理。
-      placeholder: |
-        例如：更新插件后重启 Emby，扫描媒体库时出现问题。
-    validations:
-      required: true
-
-  - type: textarea
-    id: expected
-    attributes:
-      label: 预期结果
-      placeholder: 你原本期望发生什么？
-    validations:
-      required: true
-
-  - type: textarea
-    id: actual
-    attributes:
-      label: 实际结果
-      placeholder: 实际发生了什么？是否有错误提示？
+        问题：
+        复现步骤：
+        预期结果：
+        实际结果：
+        排查情况：
     validations:
       required: true
 
@@ -121,19 +67,9 @@ body:
       required: true
 
   - type: textarea
-    id: config
-    attributes:
-      label: 相关补充
-      description: 如果问题只在特定功能、媒体或配置下出现，可以简单说明。
-      placeholder: |
-        例如：只在外部字幕、媒体库扫描或某个配置开启后出现。
-    validations:
-      required: false
-
-  - type: textarea
     id: extra
     attributes:
       label: 其他补充
-      description: 可以附上截图、临时解决方式或你已经尝试过的排查步骤。截图不能替代日志文件。
+      description: 可以补充相关配置、截图或其他信息。截图不能替代日志文件。
     validations:
       required: false
